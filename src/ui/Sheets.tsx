@@ -424,7 +424,7 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
         <dt>Split</dt>
         <dd>Two images. The lit areas are found in the difference and every lamp and window becomes its own light. Glow between lights is shared by distance, and reflections follow the lights above them.</dd>
         <dt>Per-light edits</dt>
-        <dd>One extra image per light. The model sees a crop centred on that light and switches on only it, so the way its light falls is painted, not estimated.</dd>
+        <dd>One extra image per light. The model sees a crop centred on that light, plus the same crop lit as a reference, and switches on only that light. The way its light falls is painted, not estimated.</dd>
         <dt>Moving layer</dt>
         <dd>Two more images: the scene without the moving thing, lit and unlit. The difference cuts it out with its own glow, so it can loop forever.</dd>
         <dt>Every frame</dt>
