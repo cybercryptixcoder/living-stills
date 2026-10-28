@@ -4,7 +4,7 @@ import { analyzer } from './core/analyzer';
 import { deleteLocal, exportZip, importZip, listExamples, listLocal, loadBundle, saveLocal, type SceneEntry } from './core/library';
 import { modelById } from './core/openrouter';
 import {
-  aspectString, buildGrid, createScene, refineLights, type Bundle, type CreateParams, type GridPlan, type JobStep,
+  aspectString, buildGrid, createScene, refineLights, repaintOff, type Bundle, type CreateParams, type GridPlan, type JobStep,
 } from './core/pipeline';
 import type { AnalysisResult, GroupInfo, LightInfo } from './core/types';
 import { Engine, makeRoute, type ModeId } from './play/engine';
@@ -47,7 +47,7 @@ function sceneState(b: Bundle & { source: 'example' | 'local' }, a: AnalysisResu
   };
 }
 
-export async function openBundle(b: Bundle & { source: 'example' | 'local' }) {
+export async function openBundle(b: Bundle & { source: 'example' | 'local' }, keepUi = false) {
   const set = S().set;
   set({ status: 'loading', statusText: 'Finding the lights', selected: null, hovered: null, picking: false, picked: [] });
   const token = `${b.doc.id}@${b.doc.steps.length}@${Object.keys(b.doc.images).length}`;
@@ -69,6 +69,14 @@ export async function openBundle(b: Bundle & { source: 'example' | 'local' }) {
   live.motionDx = 0;
   live.gridPhase = 0;
   const startMode = (b.doc.demo?.startMode as ModeId) || 'hand';
+  const ui = keepUi
+    ? {}
+    : {
+        view: { ...DEFAULT_VIEW, ...(b.doc.demo?.view ?? {}) },
+        mode: startMode,
+        variant: (a.editedLayer != null ? 'edits' : 'estimate') as 'edits' | 'estimate',
+        motion: { ...S().motion, playing: true },
+      };
   set({
     analysis: a,
     scene: sceneState(b, a),
@@ -78,15 +86,12 @@ export async function openBundle(b: Bundle & { source: 'example' | 'local' }) {
     groups: a.groups.map(() => 1),
     master: 1,
     elementFader: 1,
-    view: { ...DEFAULT_VIEW },
-    mode: startMode,
-    variant: a.editedLayer != null ? 'edits' : 'estimate',
-    motion: { ...S().motion, playing: true },
+    ...ui,
   });
   try { localStorage.setItem('living-stills:last', b.doc.id); } catch { /* ignore */ }
 }
 
-export async function openEntry(entry: SceneEntry) {
+export async function openEntry(entry: SceneEntry): Promise<void> {
   try {
     S().set({ status: 'loading', statusText: 'Loading the scene', sheet: null });
     const b = await loadBundle(entry);
@@ -116,7 +121,11 @@ async function finishJob(b: Bundle) {
   S().set({ job: job ? { ...job, finding: true } : null });
   await saveLocal(b);
   await refreshLibrary();
-  await openBundle({ ...b, source: 'local' });
+  try {
+    await openBundle({ ...b, source: 'local' });
+  } catch (err) {
+    throw new Error(`The images are saved in Scenes, but opening the scene failed: ${(err as Error).message}`);
+  }
   S().set({ job: null });
 }
 
@@ -161,6 +170,21 @@ export async function runRefine(lightIds: number[]) {
   }
 }
 
+/** Repaints the lights-off image (when the model removed lamps instead of switching them off). */
+export async function runRepaintOff() {
+  const b = live.bundle;
+  if (!b) return;
+  const { key, model } = S();
+  const { report, signal } = startJob('Repainting the dark version');
+  try {
+    const nb = await repaintOff(b, { key, model, signal }, report);
+    if (b.source === 'example') nb.doc = { ...nb.doc, id: `${b.doc.id}-mine-${Date.now().toString(36)}`, title: `${b.doc.title}, repainted`, demo: undefined };
+    await finishJob(nb);
+  } catch (err) {
+    failJob(err);
+  }
+}
+
 export async function plateFor(): Promise<{ lights: LightInfo[]; groups: GroupInfo[] } | null> {
   const b = live.bundle;
   if (!b || !b.doc.motion) return null;
@@ -186,6 +210,18 @@ export async function runGrid(plan: GridPlan) {
   } catch (err) {
     failJob(err);
   }
+}
+
+/** Re-finds the lights with new settings (waterline, detail). Saved for your own scenes. */
+export async function reanalyze(patch: Partial<Pick<Bundle['doc'], 'waterline' | 'analysis'>>) {
+  const b = live.bundle;
+  if (!b) return;
+  const doc = { ...b.doc, ...patch };
+  if ('waterline' in patch && patch.waterline === undefined) delete (doc as { waterline?: unknown }).waterline;
+  const nb = { ...b, doc };
+  if (b.source === 'local') await saveLocal(nb);
+  await openBundle(nb, true);
+  if (b.source === 'local') await refreshLibrary();
 }
 
 export async function removeLocal(id: string) {
@@ -242,3 +278,5 @@ export async function exportForExamples(): Promise<{ doc: unknown; files: Record
   return { doc: { ...b.doc, images }, files };
 }
 (window as unknown as { __exportScene: typeof exportForExamples }).__exportScene = exportForExamples;
+
+Object.assign(live, { openEntryForTests: openEntry });

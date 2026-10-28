@@ -326,24 +326,25 @@ button { cursor: pointer; }
 .lightcard__refine { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 9px; }
 .lightcard__refine p { margin: 0; color: var(--moon-2); font-size: 12px; }
 
-.bigswitch { display: inline-flex; align-items: center; gap: 10px; border: 0; background: none; color: var(--moon-2); font-weight: 500; }
+.bigswitch { display: inline-flex; align-items: center; gap: 11px; border: 0; background: none; color: var(--moon-2); font-weight: 500; padding: 0; }
 .bigswitch__plate {
-  width: 36px; height: 48px; border-radius: 9px; padding: 4px;
-  background: linear-gradient(180deg, #2a3150, #1a1f36); border: 1px solid rgb(255 255 255 / 0.1);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 4px 10px rgb(0 0 0 / 0.5);
-  display: grid;
+  position: relative; width: 50px; height: 28px; border-radius: 8px; padding: 3px;
+  background: linear-gradient(180deg, #1b2038, #121629); border: 1px solid rgb(255 255 255 / 0.1);
+  box-shadow: inset 0 2px 5px rgb(0 0 0 / 0.55), 0 1px 0 rgb(255 255 255 / 0.05);
 }
 .bigswitch__rocker {
-  border-radius: 6px; background: linear-gradient(180deg, #4a5378, #2c3355);
-  box-shadow: inset 0 -10px 12px -8px rgb(0 0 0 / 0.6), 0 1px 0 rgb(255 255 255 / 0.1);
-  transform: perspective(60px) rotateX(-14deg); transition: transform 0.16s var(--ease), background 0.2s, box-shadow 0.2s;
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: 26px; border-radius: 5px;
+  background: linear-gradient(180deg, #4b547a, #2d3456);
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.16);
+  transition: transform 0.18s var(--ease), background 0.2s;
+}
+.bigswitch__rocker::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
+  background: #5a6386; transition: background 0.2s, box-shadow 0.2s;
 }
 .bigswitch.is-on { color: var(--moon); }
-.bigswitch.is-on .bigswitch__rocker {
-  transform: perspective(60px) rotateX(14deg);
-  background: linear-gradient(180deg, #59628b, #3a4268);
-  box-shadow: inset 0 10px 12px -8px rgb(0 0 0 / 0.5), 0 0 14px -2px rgb(var(--lit-rgb) / 0.6);
-}
+.bigswitch.is-on .bigswitch__rocker { transform: translateX(16px); background: linear-gradient(180deg, #5a6390, #384070); }
+.bigswitch.is-on .bigswitch__rocker::after { background: rgb(var(--lit-rgb)); box-shadow: 0 0 10px 2px rgb(var(--lit-rgb) / 0.7); }
 
 .swatches { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; }
 .swatch {

@@ -76,7 +76,7 @@ export function Stage() {
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
-      const dt = Math.min(0.1, (now - last) / 1000);
+      const dt = Math.min(live.engine.maxDt, (now - last) / 1000);
       last = now;
       frame++;
       const st = S();
@@ -168,15 +168,41 @@ export function Stage() {
         const L = e.lights[i];
         return Math.max(5, Math.min(22, Math.sqrt(L.area) * sx * 0.9 + 4));
       };
+      const dot = (x: number, y: number, rad: number, color: string) => {
+        const [X, Y] = toScreen(x, y);
+        octx.beginPath();
+        octx.fillStyle = color;
+        octx.arc(X, Y, rad, 0, Math.PI * 2);
+        octx.fill();
+      };
       if (st.showLights || st.picking) {
         for (let i = 0; i < e.lights.length; i++) {
           const lv = e.level[i];
           const picked = st.picked.includes(e.lights[i].id);
           const inGroup = st.hoverGroup != null && e.lights[i].group === st.hoverGroup;
-          const alpha = picked ? 0.95 : inGroup ? 0.9 : 0.28 + 0.4 * lv;
-          ring(e.posX[i], e.posY[i], lightRadius(i), picked ? 'rgba(255,214,140,0.95)' : `rgba(214,220,236,${alpha})`, picked ? 1.6 : 1);
+          if (picked) {
+            ring(e.posX[i], e.posY[i], lightRadius(i) + 2, 'rgba(255,214,140,0.95)', 1.6);
+            dot(e.posX[i], e.posY[i], 3, 'rgba(255,214,140,1)');
+          } else {
+            dot(e.posX[i], e.posY[i], inGroup ? 3.2 : 2.2, `rgba(${lv > 0.5 ? '255,226,180' : '214,220,236'},${inGroup ? 0.95 : 0.35 + 0.45 * lv})`);
+          }
         }
-      } else if (st.hoverGroup != null) {
+      }
+      if (st.previewWaterline != null) {
+        const [, Y] = toScreen(0, st.previewWaterline);
+        octx.setLineDash([6, 6]);
+        octx.strokeStyle = 'rgba(160,200,255,0.8)';
+        octx.lineWidth = 1.2;
+        octx.beginPath();
+        octx.moveTo(rect.x, Y);
+        octx.lineTo(rect.x + rect.w, Y);
+        octx.stroke();
+        octx.setLineDash([]);
+        octx.fillStyle = 'rgba(200,220,255,0.85)';
+        octx.font = '12px "IBM Plex Sans", sans-serif';
+        octx.fillText('Reflections below this line', rect.x + 12, Y - 8);
+      }
+      if (!(st.showLights || st.picking) && st.hoverGroup != null) {
         for (let i = 0; i < e.lights.length; i++)
           if (e.lights[i].group === st.hoverGroup) ring(e.posX[i], e.posY[i], lightRadius(i), 'rgba(214,220,236,0.75)');
         if (st.hoverGroup === -2 && e.hasElement) {

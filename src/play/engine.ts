@@ -121,6 +121,14 @@ export class Engine {
   litColor: Vec3 = [1, 0.75, 0.45];
   private wakeAt = -100;
 
+  /** Longest time step per frame; tests on software rendering raise it so engine time keeps up. */
+  maxDt = 0.1;
+
+  /** Skips the wake-up reveal (tests). */
+  finishWake() {
+    this.wakeAt = -100;
+  }
+
   /** The scene "wakes": lights come on one by one over about two seconds. */
   wake() {
     this.wakeAt = this.time;

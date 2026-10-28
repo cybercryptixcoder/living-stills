@@ -313,7 +313,8 @@ function compFromPixels(pixels: number[], w: number, lumD: Float32Array, D: Floa
 function splitComp(c: Comp, w: number, lumD: Float32Array, D: Float32Array, maxArea: number, depth = 0): Comp[] {
   const bw = c.x1 - c.x0 + 1, bh = c.y1 - c.y0 + 1;
   const long = Math.max(bw, bh), short = Math.min(bw, bh);
-  if (depth > 7 || long < 8 || (c.pixels.length <= maxArea && long / short < 3.2)) return [c];
+  // Only rows or columns of lights get split; a compact blob (a lantern with dark frame bars) stays whole.
+  if (depth > 7 || long < 8 || (long / short < 1.8 && c.pixels.length <= 3 * maxArea) || (c.pixels.length <= maxArea && long / short < 3.2)) return [c];
   const alongX = bw >= bh;
   const L = alongX ? bw : bh;
   const prof = new Float32Array(L);
@@ -331,7 +332,7 @@ function splitComp(c: Comp, w: number, lumD: Float32Array, D: Float32Array, maxA
     const ratio = sm[k] / Math.max(1e-9, Math.min(leftMax[k], rightMax[k]));
     if (ratio < best) { best = ratio; bk = k; }
   }
-  if (bk < 0 || best > 0.62) return [c];
+  if (bk < 0 || best > 0.5) return [c];
   const a: number[] = [], b: number[] = [];
   for (const i of c.pixels) {
     const k = alongX ? (i % w) - c.x0 : ((i / w) | 0) - c.y0;
@@ -460,7 +461,7 @@ export function detectLights(
     for (const i of c.pixels) coreLight[i] = id;
     return {
       id, x: c.cx, y: c.cy, bbox: [c.x0, c.y0, c.x1, c.y1], area: c.pixels.length,
-      flux: c.flux, color: c.rgb, group: 0,
+      flux: c.flux, peak: c.peak, color: c.rgb, group: 0,
     };
   });
   return { lights, coreLight };
@@ -728,7 +729,8 @@ export function cropDelta(baseLin: Float32Array, w: number, h: number, crop: Rec
   const base = new Float32Array(n * 3);
   for (let y = 0; y < ch; y++)
     for (let x = 0; x < cw; x++) {
-      const s = ((cy + y) * w + cx + x) * 3, o = (y * cw + x) * 3;
+      const X = Math.min(w - 1, Math.max(0, cx + x)), Y = Math.min(h - 1, Math.max(0, cy + y));
+      const s = (Y * w + X) * 3, o = (y * cw + x) * 3;
       base[o] = baseLin[s]; base[o + 1] = baseLin[s + 1]; base[o + 2] = baseLin[s + 2];
     }
   const gain = estimateGain(luminance(res, n), luminance(base, n));
@@ -791,7 +793,9 @@ export function layerFromContributions(
         const r = c.d[s], g = c.d[s + 1], b = c.d[s + 2];
         const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
         if (l <= 0) continue;
-        const i = (cy + y) * w + cx + x, j = i * 3;
+        const X = cx + x, Y = cy + y;
+        if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+        const i = Y * w + X, j = i * 3;
         sum[j] += r; sum[j + 1] += g; sum[j + 2] += b;
         insert(i, c.id, l);
       }
@@ -932,7 +936,7 @@ export function computeSprite(
   const sx0 = Math.max(0, Math.round(rx - 0.5 * rw)), sx1 = Math.min(w, Math.round(rx + 1.5 * rw));
   const sy0 = Math.max(0, Math.round(ry - 0.6 * rh)), sy1 = Math.min(h, Math.round(ry + rh + Math.max(2.5 * rh, 0.25 * h)));
   const sw = sx1 - sx0, sh = sy1 - sy0, sn = sw * sh;
-  const sOn = lin(take(tOn, sx0, sy0, sw, sh)), sP = lin(take(pOn, sx0, sy0, sw, sh));
+  const sOn = rgbaToLinear(take(tOn, sx0, sy0, sw, sh), sn), sP = rgbaToLinear(take(pOn, sx0, sy0, sw, sh), sn);
   const gain = estimateGain(luminance(sOn, sn), luminance(sP, sn));
   const { D } = computeDelta(sOn, sP, sw, sh, gain, 1.2, (x, y) => {
     const X = x + sx0 - rx, Y = y + sy0 - ry;
@@ -981,7 +985,7 @@ export function compositeSprite(baseLin: Float32Array, w: number, h: number, sp:
 }
 
 /** Crop rectangle around a region, padded with context and fitted to an aspect ratio inside the image. */
-export function contextCrop(region: Rect, w: number, h: number, aspect: number, pad = 2.2, minW = 192): Rect {
+export function contextCrop(region: Rect, w: number, h: number, aspect: number, pad = 2.2, minW = 192, keepCentred = false): Rect {
   const [x, y, rw, rh] = region;
   const cx = x + rw / 2, cy = y + rh / 2;
   let cw = Math.max(minW, rw * pad, rh * pad * aspect);
@@ -990,6 +994,7 @@ export function contextCrop(region: Rect, w: number, h: number, aspect: number, 
   if (cw > w) { cw = w; ch = cw / aspect; }
   if (ch > h) { ch = h; cw = Math.min(w, ch * aspect); }
   cw = Math.round(cw); ch = Math.round(ch);
+  if (keepCentred) return [Math.round(cx - cw / 2), Math.round(cy - ch / 2), cw, ch]; // may extend past the edges
   const x0 = Math.round(Math.min(w - cw, Math.max(0, cx - cw / 2)));
   const y0 = Math.round(Math.min(h - ch, Math.max(0, cy - ch / 2)));
   return [x0, y0, cw, ch];

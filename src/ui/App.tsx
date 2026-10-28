@@ -4,7 +4,7 @@ import { useStore } from '../state';
 import { Console, MODES } from './Console';
 import { JobOverlay } from './JobOverlay';
 import { LightCard } from './LightCard';
-import { CreateSheet, GridSheet, HelpSheet, RefineSheet, ScenesSheet, SettingsSheet } from './Sheets';
+import { CreateSheet, GridSheet, HelpSheet, ReflectionsSheet, RefineSheet, ScenesSheet, SettingsSheet } from './Sheets';
 import { switchSound, tickSound } from './sound';
 import { Stage } from './Stage';
 import { TopBar } from './TopBar';
@@ -82,6 +82,7 @@ export function App() {
       {sheet === 'refine' && <RefineSheet onClose={close} />}
       {sheet === 'grid' && <GridSheet onClose={close} />}
       {sheet === 'help' && <HelpSheet onClose={close} />}
+      {sheet === 'reflections' && <ReflectionsSheet onClose={close} />}
       {cinema && <button className="cinema-exit" onClick={() => set({ cinema: false })}>Show controls</button>}
     </div>
   );

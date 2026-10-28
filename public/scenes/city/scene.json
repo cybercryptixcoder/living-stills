@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "id": "city",
+  "title": "Window City",
+  "prompt": "Dense old apartment blocks seen from across a canal, hundreds of small windows, balconies with plants, laundry lines and air-conditioner units, a narrow street at the bottom, light rain",
+  "style": "watercolour",
+  "createdAt": "2026-10-28T16:42:55.703Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg"
+  },
+  "steps": [
+    {
+      "label": "Painting the scene",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 7070,
+      "image": "on"
+    },
+    {
+      "label": "Switching every light off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9586,
+      "image": "off"
+    }
+  ],
+  "cost": 0.018,
+  "demo": {
+    "order": 4,
+    "startMode": "torch",
+    "view": {
+      "ambient": 0.7
+    }
+  }
+}

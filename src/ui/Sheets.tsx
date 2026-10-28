@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { exportZip, loadBundle, type SceneEntry } from '../core/library';
 import { checkKey, MODELS, modelById, priceOf } from '../core/openrouter';
-import { estimateCreate, gridCellCount } from '../core/pipeline';
+import { bestForEdits, estimateCreate, gridCellCount } from '../core/pipeline';
 import { IDEAS, STYLES } from '../core/prompts';
 import type { GroupInfo, LightInfo } from '../core/types';
-import { importScene, openEntry, plateFor, removeLocal, runCreate, runGrid, runRefine, saveBlob, slug } from '../live';
+import { importScene, openEntry, plateFor, reanalyze, removeLocal, runCreate, runGrid, runRefine, saveBlob, slug } from '../live';
 import { useStore } from '../state';
-import { Segmented, Toggle } from './controls';
+import { Segmented, Slider, Toggle } from './controls';
 import { Icon } from './icons';
 import { MODES } from './Console';
 import { tickSound } from './sound';
@@ -161,7 +161,7 @@ export function CreateSheet({ onClose }: { onClose: () => void }) {
       </label>
       <div className="ideas" aria-label="Ideas">
         {IDEAS.map((i) => (
-          <button key={i.title} className="chip" onClick={() => { setDesc(i.prompt); setElement(i.element ?? ''); setTitle(''); tickSound(); }}>{i.title}</button>
+          <button key={i.title} className="chip" onClick={() => { setDesc(i.prompt); setElement(i.element ?? ''); setTitle(i.name); tickSound(); }}>{i.title}</button>
         ))}
       </div>
       <div className="field">
@@ -260,12 +260,12 @@ export function RefineSheet({ onClose }: { onClose: () => void }) {
   const model = useStore((s) => s.model);
   const set = useStore((s) => s.set);
   useEffect(() => {
+    const before = useStore.getState().showLights;
     set({ picking: true, showLights: true });
-    return () => set({ picking: false });
+    return () => set({ picking: false, showLights: before });
   }, [set]);
   if (!analysis) return null;
-  const lights = analysis.lights;
-  const brightest = (n: number) => [...lights].sort((a, b) => b.flux - a.flux).slice(0, n).map((L) => L.id);
+  const brightest = (n: number) => bestForEdits(analysis.lights, analysis.width, analysis.height, analysis.waterline, n);
   const cost = picked.length * priceOf(model, '768');
   return (
     <Sheet title="Real edits for chosen lights" onClose={() => { set({ picked: [] }); onClose(); }}
@@ -360,6 +360,57 @@ function MatrixRow({ label, frames }: { label: string; frames: number }) {
       <span className="matrix__row">{label}</span>
       {Array.from({ length: frames }, (_, f) => <span key={f} className="matrix__cell" />)}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- reflections and light detail
+
+export function ReflectionsSheet({ onClose }: { onClose: () => void }) {
+  const scene = useStore((s) => s.scene);
+  const analysis = useStore((s) => s.analysis);
+  const set = useStore((s) => s.set);
+  const doc = scene?.doc;
+  const H = analysis?.height ?? 1;
+  const initial: 'auto' | 'set' | 'none' = doc?.waterline === undefined ? 'auto' : doc.waterline === null ? 'none' : 'set';
+  const [how, setHow] = useState(initial);
+  const [y, setY] = useState((doc?.waterline ?? analysis?.waterline ?? H * 0.7) / H);
+  const [detail, setDetail] = useState(doc?.analysis?.coreStrictness ?? 1);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    set({ previewWaterline: how === 'set' ? y * H : how === 'auto' ? analysis?.waterline ?? null : null });
+  }, [how, y, H, analysis, set]);
+  useEffect(() => () => set({ previewWaterline: null }), [set]);
+  if (!doc || !analysis) return null;
+  const apply = async () => {
+    setBusy(true);
+    await reanalyze({
+      waterline: how === 'auto' ? undefined : how === 'none' ? null : Math.round(y * H),
+      analysis: { ...(doc.analysis ?? {}), coreStrictness: detail },
+    });
+    setBusy(false);
+    onClose();
+  };
+  const now = analysis.waterline == null ? 'There is no reflection line now.' : `The line is now ${Math.round((analysis.waterline / H) * 100)}% of the way down.`;
+  return (
+    <Sheet title="Lights and reflections" onClose={onClose}
+      footer={<div className="estimate"><p>{analysis.lights.length} lights now. Free, runs in your browser.</p><button className="btn btn--primary btn--big" disabled={busy} onClick={apply}>{busy ? 'Finding lights…' : 'Find the lights again'}</button></div>}>
+      <p className="lede">Below the reflection line, light is treated as a reflection of the lights above it, so a lamp and its reflection switch together. Put it where the water or the wet ground begins.</p>
+      <div className="field">
+        <span className="field__label">Reflection line</span>
+        <Segmented label="Reflection line" value={how} onChange={setHow} options={[
+          { value: 'auto', label: 'Find it', hint: 'Look for water automatically' },
+          { value: 'set', label: 'Set it', hint: 'Choose where reflections begin' },
+          { value: 'none', label: 'None', hint: 'No reflections in this scene' },
+        ]} />
+        {how === 'set' && <Slider label="Height" value={y} min={0.2} max={0.98} def={0.7} format={(v) => `${Math.round(v * 100)}%`} onChange={setY} title="How far down the picture reflections begin" />}
+        <span className="field__hint">{now} The dashed line on the picture shows where it will be.</span>
+      </div>
+      <div className="field">
+        <span className="field__label">Light detail</span>
+        <Slider label="Detail" value={2 - detail} min={0.4} max={1.4} def={1} format={(v) => (v > 1.05 ? 'Finer' : v < 0.95 ? 'Coarser' : 'Normal')} onChange={(v) => setDetail(2 - v)} title="Finer finds more, smaller lights" />
+        <span className="field__hint">Finer finds dimmer and smaller lights; coarser keeps only the brightest.</span>
+      </div>
+    </Sheet>
   );
 }
 

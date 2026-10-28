@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "id": "viaduct",
+  "title": "Night Viaduct",
+  "prompt": "A small local train crosses a long, low stone arch viaduct over a still river, seen exactly from the side from far away. A sleepy hillside town behind with house windows and street lamps along the riverbank, their light reflected in the dark water",
+  "style": "watercolour",
+  "createdAt": "2026-10-28T16:37:15.198Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "layered",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg",
+    "plateOn": "plateOn.jpg",
+    "plateOff": "plateOff.jpg"
+  },
+  "steps": [
+    {
+      "label": "Painting the scene",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9529,
+      "image": "on"
+    },
+    {
+      "label": "Switching every light off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9472,
+      "image": "off"
+    },
+    {
+      "label": "Taking the train out",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 12536,
+      "image": "plateOn"
+    },
+    {
+      "label": "Switching the lights off without it",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 8828,
+      "image": "plateOff"
+    }
+  ],
+  "cost": 0.036,
+  "motion": {
+    "element": "the train",
+    "rect": [
+      317,
+      302,
+      853,
+      120
+    ],
+    "dir": 1,
+    "speed": 82
+  },
+  "waterline": 548,
+  "demo": {
+    "order": 1,
+    "startMode": "hand",
+    "blurb": "The train is cut out once and loops forever. The town is split into 240 lights."
+  }
+}

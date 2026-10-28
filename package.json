@@ -6,7 +6,7 @@
   "description": "Bring a still night illustration to life: switch, dim and animate every light in it.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "e2e": "node scripts/e2e.mjs"

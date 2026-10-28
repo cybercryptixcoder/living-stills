@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "id": "alley",
+  "title": "Rain Alley",
+  "prompt": "A narrow back alley after rain, wet stone paving, a few hanging lanterns, a glowing vending machine, a paper-shade window, an old street lamp, puddles reflecting the light",
+  "style": "watercolour",
+  "createdAt": "2026-10-28T17:04:04.905Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "perLight",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg",
+    "refine_21": "refine_21.jpg",
+    "refine_27": "refine_27.jpg",
+    "refine_60": "refine_60.jpg",
+    "refine_66": "refine_66.jpg",
+    "refine_73": "refine_73.jpg"
+  },
+  "steps": [
+    {
+      "label": "Painting the scene",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 6735,
+      "image": "on"
+    },
+    {
+      "label": "Switching every light off again",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10459,
+      "image": "off"
+    },
+    {
+      "label": "Light 21",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 10079,
+      "image": "refine_21"
+    },
+    {
+      "label": "Light 27",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 12060,
+      "image": "refine_27"
+    },
+    {
+      "label": "Light 60",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 14112,
+      "image": "refine_60"
+    },
+    {
+      "label": "Light 66",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 12964,
+      "image": "refine_66"
+    },
+    {
+      "label": "Light 73",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 11433,
+      "image": "refine_73"
+    }
+  ],
+  "cost": 0.058,
+  "demo": {
+    "order": 3,
+    "startMode": "hand",
+    "view": {
+      "ambient": 0.8
+    }
+  },
+  "waterline": 470,
+  "refinements": [
+    {
+      "lightId": 21,
+      "at": [
+        746,
+        159
+      ],
+      "crop": [
+        610,
+        82,
+        272,
+        154
+      ],
+      "image": "refine_21"
+    },
+    {
+      "lightId": 27,
+      "at": [
+        218,
+        183
+      ],
+      "crop": [
+        -14,
+        52,
+        465,
+        262
+      ],
+      "image": "refine_27"
+    },
+    {
+      "lightId": 60,
+      "at": [
+        981,
+        292
+      ],
+      "crop": [
+        641,
+        100,
+        680,
+        384
+      ],
+      "image": "refine_60"
+    },
+    {
+      "lightId": 66,
+      "at": [
+        684,
+        320
+      ],
+      "crop": [
+        548,
+        243,
+        272,
+        154
+      ],
+      "image": "refine_66"
+    },
+    {
+      "lightId": 73,
+      "at": [
+        418,
+        336
+      ],
+      "crop": [
+        78,
+        144,
+        680,
+        384
+      ],
+      "image": "refine_73"
+    }
+  ]
+}

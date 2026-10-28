@@ -2,8 +2,8 @@
 // Runs inside the analysis worker; images arrive as decoded RGBA.
 
 import {
-  analyzeSplit, computeSprite, compositeSprite, cropDelta, layerFromContributions, lightScore,
-  linearToRgba, rgbaToLinear, type CropDelta,
+  analyzeSplit, boxBlur, computeSprite, compositeSprite, cropDelta, layerFromContributions, lightScore,
+  linearToRgba, rgbaToLinear, smoothstep, type CropDelta,
 } from './analysis';
 import type { AnalysisResult, GroupInfo, LayerData, LightInfo, Rect, SceneDoc, SpriteData } from './types';
 import { DEFAULT_ANALYSIS } from './types';
@@ -59,6 +59,31 @@ export function gridFrameLin(split: PlateInfo['split'], sprite: SpriteData, w: n
   return compositeSprite(split.offLin, w, h, sprite, dx, 0);
 }
 
+/**
+ * Where a refined light may add light: the area the split analysis gave to it, softened and widened a
+ * little. Keeps an edit from leaking light the model invented elsewhere in the crop.
+ */
+function splitOwnership(layer: { ids: Uint8Array; weights: Uint8Array }, w: number, h: number, id: number, crop: Rect) {
+  const [cx, cy, cw, ch] = crop;
+  const m = new Float32Array(cw * ch);
+  for (let y = 0; y < ch; y++)
+    for (let x = 0; x < cw; x++) {
+      const X = cx + x, Y = cy + y;
+      if (X < 0 || Y < 0 || X >= w || Y >= h) continue;
+      const o = (Y * w + X) * 4;
+      let v = 0;
+      for (let q = 0; q < 4; q++) if (layer.ids[o + q] === id) v += layer.weights[o + q] / 255;
+      m[y * cw + x] = v;
+    }
+  const r = Math.max(2, Math.round(0.012 * w));
+  const b = boxBlur(boxBlur(m, cw, ch, r), cw, ch, r);
+  return (X: number, Y: number) => {
+    const x = X - cx, y = Y - cy;
+    if (x < 0 || y < 0 || x >= cw || y >= ch) return 0;
+    return smoothstep(0.03, 0.3, b[y * cw + x]);
+  };
+}
+
 /** For a static grid group: how much of each pixel's light belongs to that group's lights. */
 export function ownershipFn(lights: LightInfo[], members: Set<number>, waterline: number | null) {
   return (x: number, y: number) => {
@@ -92,9 +117,23 @@ export async function analyzeScene(doc: SceneDoc, get: ImageGetter): Promise<Ana
     const crops: CropDelta[] = [];
     const replaced = new Set<number>();
     for (const r of doc.refinements ?? []) {
+      // Find the light again by where it was; ids can change when lights are re-found.
+      let id = r.lightId;
+      if (r.at) {
+        let best = Infinity;
+        for (const L of split.lights) {
+          const [x0, y0, x1, y1] = L.bbox;
+          const dx = r.at[0] < x0 ? x0 - r.at[0] : r.at[0] > x1 ? r.at[0] - x1 : 0;
+          const dy = r.at[1] < y0 ? y0 - r.at[1] : r.at[1] > y1 ? r.at[1] - y1 : 0;
+          const d = Math.hypot(dx, dy) + 0.01 * Math.hypot(L.x - r.at[0], L.y - r.at[1]);
+          if (d < best) { best = d; id = L.id; }
+        }
+        if (best > 40) continue; // that light no longer exists
+      }
+      if (replaced.has(id)) continue;
       const img = await get(r.image, [r.crop[2], r.crop[3]]);
-      crops.push(cropDelta(split.offLin, w, h, r.crop, img.data, r.lightId, p.cleanup));
-      replaced.add(r.lightId);
+      crops.push(cropDelta(split.offLin, w, h, r.crop, img.data, id, p.cleanup, splitOwnership(split.layer, w, h, id, r.crop)));
+      replaced.add(id);
     }
     const edited = layerFromContributions(w, h, split.layer.base, crops, {
       D: split.D, ids: split.layer.ids, weights: split.layer.weights, replaced,
@@ -177,7 +216,15 @@ export async function cropSource(
   }
   const [cx, cy, cw, ch] = crop;
   const out = new Uint8ClampedArray(cw * ch * 4);
-  for (let y = 0; y < ch; y++) out.set(full.subarray(((cy + y) * w + cx) * 4, ((cy + y) * w + cx + cw) * 4), y * cw * 4);
+  // Crops may reach past the picture (to keep a light centred): repeat the edge pixels there.
+  for (let y = 0; y < ch; y++) {
+    const Y = Math.min(h - 1, Math.max(0, cy + y));
+    for (let x = 0; x < cw; x++) {
+      const X = Math.min(w - 1, Math.max(0, cx + x));
+      const s = (Y * w + X) * 4, o = (y * cw + x) * 4;
+      out[o] = full[s]; out[o + 1] = full[s + 1]; out[o + 2] = full[s + 2]; out[o + 3] = 255;
+    }
+  }
   return { w: cw, h: ch, data: out };
 }
 

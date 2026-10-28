@@ -1,4 +1,4 @@
-import { downloadScene } from '../live';
+import { downloadScene, runRepaintOff } from '../live';
 import { useStore } from '../state';
 import { Icon } from './icons';
 import { tickSound } from './sound';
@@ -20,7 +20,7 @@ export function methodLine(doc: { method: string; cost: number; steps: { image?:
     case 'layered':
       return `${made} ${capital(doc.motion?.element ?? 'The element')} is cut out once and travels as its own layer.`;
     case 'grid':
-      return `${made} Each light was painted again at all ${doc.grid?.frames ?? 0} positions.`;
+      return `${made} Each light was painted again at ${doc.grid?.frames === 2 ? 'both' : `all ${doc.grid?.frames ?? 0}`} positions of the ${(doc.motion?.element ?? 'element').replace(/^the /, '')}.`;
     default:
       return made;
   }
@@ -36,7 +36,7 @@ export function TopBar() {
   const cinema = useStore((s) => s.cinema);
   const spend = useStore((s) => s.spend);
   const set = useStore((s) => s.set);
-  const open = (sheet: 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help') => { set({ sheet }); tickSound(); };
+  const open = (sheet: 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help' | 'reflections') => { set({ sheet }); tickSound(); };
   return (
     <header className={`topbar${cinema ? ' is-hidden' : ''}`}>
       <div className="titlecard">
@@ -50,6 +50,17 @@ export function TopBar() {
               )}
               {(scene.doc.method === 'layered' || scene.doc.method === 'grid') && (
                 <button onClick={() => open('grid')}>Paint every frame</button>
+              )}
+              {scene.doc.method !== 'grid' && <button onClick={() => open('reflections')}>Lights and reflections</button>}
+              {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
+                <button
+                  onClick={() => {
+                    const n = scene.doc.refinements?.length ?? 0;
+                    const msg = `Ask the model for a new lights-off version (one image, about 1¢). Use this if lamps vanished instead of going dark.${n ? ` The ${n} per-light edits were made against the old one and will be dropped.` : ''}`;
+                    if (useStore.getState().key && confirm(msg)) void runRepaintOff();
+                    else if (!useStore.getState().key) set({ sheet: 'settings' });
+                  }}
+                >Repaint the dark version</button>
               )}
               <button onClick={() => void downloadScene()}>Download scene</button>
             </nav>

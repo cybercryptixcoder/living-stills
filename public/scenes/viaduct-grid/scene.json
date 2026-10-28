@@ -1,0 +1,430 @@
+{
+  "version": 1,
+  "id": "viaduct-grid",
+  "title": "Night Viaduct, every frame",
+  "prompt": "A small local train crosses a long, low stone arch viaduct over a still river, seen exactly from the side from far away. A sleepy hillside town behind with house windows and street lamps along the riverbank, their light reflected in the dark water",
+  "style": "watercolour",
+  "createdAt": "2026-10-28T17:59:35.687Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "grid",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg",
+    "plateOn": "plateOn.jpg",
+    "plateOff": "plateOff.jpg",
+    "grid_f0_g1": "grid_f0_g1.jpg",
+    "grid_f0_g2": "grid_f0_g2.jpg",
+    "grid_f0_g3": "grid_f0_g3.jpg",
+    "grid_f1_g1": "grid_f1_g1.jpg",
+    "grid_f1_g2": "grid_f1_g2.jpg",
+    "grid_f1_g3": "grid_f1_g3.jpg",
+    "grid_f2_g1": "grid_f2_g1.jpg",
+    "grid_f2_g2": "grid_f2_g2.jpg",
+    "grid_f2_g3": "grid_f2_g3.jpg",
+    "grid_f3_g1": "grid_f3_g1.jpg",
+    "grid_f3_g2": "grid_f3_g2.jpg",
+    "grid_f3_g3": "grid_f3_g3.jpg"
+  },
+  "steps": [
+    {
+      "label": "Painting the scene",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9529,
+      "image": "on"
+    },
+    {
+      "label": "Switching every light off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9472,
+      "image": "off"
+    },
+    {
+      "label": "Taking the train out",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 12536,
+      "image": "plateOn"
+    },
+    {
+      "label": "Switching the lights off without it",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 8828,
+      "image": "plateOff"
+    },
+    {
+      "label": "Frame 1, Lights D",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 11053,
+      "image": "grid_f0_g2"
+    },
+    {
+      "label": "Frame 1, Lights G",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 12385,
+      "image": "grid_f0_g3"
+    },
+    {
+      "label": "Frame 1, Train",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 15961,
+      "image": "grid_f0_g1"
+    },
+    {
+      "label": "Frame 2, Train",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 12353,
+      "image": "grid_f1_g1"
+    },
+    {
+      "label": "Frame 2, Lights G",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 12723,
+      "image": "grid_f1_g3"
+    },
+    {
+      "label": "Frame 2, Lights D",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 13339,
+      "image": "grid_f1_g2"
+    },
+    {
+      "label": "Frame 3, Train",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 11230,
+      "image": "grid_f2_g1"
+    },
+    {
+      "label": "Frame 3, Lights D",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 11464,
+      "image": "grid_f2_g2"
+    },
+    {
+      "label": "Frame 3, Lights G",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 14435,
+      "image": "grid_f2_g3"
+    },
+    {
+      "label": "Frame 4, Train",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 11700,
+      "image": "grid_f3_g1"
+    },
+    {
+      "label": "Frame 4, Lights D",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 11155,
+      "image": "grid_f3_g2"
+    },
+    {
+      "label": "Frame 4, Lights G",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.008,
+      "ms": 14210,
+      "image": "grid_f3_g3"
+    }
+  ],
+  "cost": 0.13200000000000003,
+  "motion": {
+    "element": "the train",
+    "rect": [
+      317,
+      302,
+      853,
+      120
+    ],
+    "dir": 1,
+    "speed": 82
+  },
+  "waterline": 548,
+  "demo": {
+    "order": 2,
+    "startMode": "hand"
+  },
+  "grid": {
+    "frames": 4,
+    "offsets": [
+      -276,
+      -134,
+      7,
+      149
+    ],
+    "groups": [
+      {
+        "id": 1,
+        "name": "Train",
+        "kind": "moving"
+      },
+      {
+        "id": 2,
+        "name": "Lights D",
+        "kind": "static",
+        "region": [
+          391,
+          102,
+          329,
+          287
+        ],
+        "lights": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          25,
+          46,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          118,
+          119,
+          120,
+          121,
+          122,
+          132,
+          133,
+          134,
+          150,
+          151,
+          152,
+          153,
+          154,
+          177,
+          210
+        ]
+      },
+      {
+        "id": 3,
+        "name": "Lights G",
+        "kind": "static",
+        "region": [
+          1006,
+          135,
+          302,
+          141
+        ],
+        "lights": [
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          92,
+          93,
+          94,
+          95,
+          111,
+          112,
+          113,
+          114
+        ]
+      }
+    ],
+    "cells": [
+      {
+        "f": 0,
+        "g": 1,
+        "crop": [
+          0,
+          37,
+          1152,
+          650
+        ],
+        "image": "grid_f0_g1"
+      },
+      {
+        "f": 0,
+        "g": 2,
+        "crop": [
+          225,
+          59,
+          661,
+          373
+        ],
+        "image": "grid_f0_g2"
+      },
+      {
+        "f": 0,
+        "g": 3,
+        "crop": [
+          961,
+          95,
+          393,
+          222
+        ],
+        "image": "grid_f0_g3"
+      },
+      {
+        "f": 1,
+        "g": 1,
+        "crop": [
+          34,
+          37,
+          1152,
+          650
+        ],
+        "image": "grid_f1_g1"
+      },
+      {
+        "f": 1,
+        "g": 2,
+        "crop": [
+          225,
+          59,
+          661,
+          373
+        ],
+        "image": "grid_f1_g2"
+      },
+      {
+        "f": 1,
+        "g": 3,
+        "crop": [
+          961,
+          95,
+          393,
+          222
+        ],
+        "image": "grid_f1_g3"
+      },
+      {
+        "f": 2,
+        "g": 1,
+        "crop": [
+          175,
+          37,
+          1152,
+          650
+        ],
+        "image": "grid_f2_g1"
+      },
+      {
+        "f": 2,
+        "g": 2,
+        "crop": [
+          225,
+          59,
+          661,
+          373
+        ],
+        "image": "grid_f2_g2"
+      },
+      {
+        "f": 2,
+        "g": 3,
+        "crop": [
+          961,
+          95,
+          393,
+          222
+        ],
+        "image": "grid_f2_g3"
+      },
+      {
+        "f": 3,
+        "g": 1,
+        "crop": [
+          208,
+          37,
+          1152,
+          650
+        ],
+        "image": "grid_f3_g1"
+      },
+      {
+        "f": 3,
+        "g": 2,
+        "crop": [
+          225,
+          59,
+          661,
+          373
+        ],
+        "image": "grid_f3_g2"
+      },
+      {
+        "f": 3,
+        "g": 3,
+        "crop": [
+          961,
+          95,
+          393,
+          222
+        ],
+        "image": "grid_f3_g3"
+      }
+    ]
+  }
+}

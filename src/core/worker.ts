@@ -39,10 +39,11 @@ function getter(token: string) {
 }
 
 function transferables(r: AnalysisResult): Transferable[] {
-  const t: Transferable[] = [];
-  for (const L of r.layers) t.push(L.base.buffer, L.delta.buffer, L.ids.buffer, L.weights.buffer);
-  if (r.sprite) t.push(r.sprite.lit.buffer, r.sprite.dark.buffer, r.sprite.spill.buffer);
-  return t;
+  // Layers can share buffers (an edited layer reuses the estimate's base), so de-duplicate.
+  const t = new Set<ArrayBufferLike>();
+  for (const L of r.layers) [L.base, L.delta, L.ids, L.weights].forEach((a) => t.add(a.buffer));
+  if (r.sprite) [r.sprite.lit, r.sprite.dark, r.sprite.spill].forEach((a) => t.add(a.buffer));
+  return [...t] as Transferable[];
 }
 
 async function encodePng(d: Decoded, outW?: number): Promise<Blob> {
@@ -64,7 +65,13 @@ self.onmessage = async (e: MessageEvent) => {
     if (token && token !== currentToken) currentToken = token;
     const get = getter(token ?? currentToken);
     if (type === 'analyze') {
-      const r = await analyzeScene(doc, get);
+      const r0 = await analyzeScene(doc, get);
+      // The plate analysis is cached here for later crops, so hand over copies, never the cached buffers.
+      const r = {
+        ...r0,
+        layers: r0.layers.map((L) => ({ base: L.base.slice(), delta: L.delta.slice(), ids: L.ids.slice(), weights: L.weights.slice() })),
+        sprite: r0.sprite && { ...r0.sprite, lit: r0.sprite.lit.slice(), dark: r0.sprite.dark.slice(), spill: r0.sprite.spill.slice() },
+      };
       self.postMessage({ id, ok: true, result: r }, transferables(r));
     } else if (type === 'crop') {
       const { src, crop, outW } = e.data as { src: Parameters<typeof cropSource>[2]; crop: Rect; outW?: number };

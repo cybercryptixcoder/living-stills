@@ -17,6 +17,8 @@ export interface StepLog {
 /** A per-light edit: the light was switched on by the image model inside a crop. */
 export interface Refinement {
   lightId: number;
+  /** Where the light was (its centre), so the edit finds its light again if lights are re-found. */
+  at?: [number, number];
   crop: Rect;
   image: string; // image key of the edited crop
 }
@@ -84,6 +86,7 @@ export interface SceneDoc {
   cost: number;
   demo?: {
     blurb?: string;
+    view?: Partial<{ ambient: number; exposure: number; glow: number; haze: number; grain: number; warmth: number }>;
     route?: [number, number][];
     startMode?: string;
     order?: number;
@@ -97,6 +100,7 @@ export interface LightInfo {
   bbox: [number, number, number, number]; // x0, y0, x1, y1 inclusive
   area: number;
   flux: number; // summed linear luminance of its light core
+  peak?: number; // brightest added light in the core (emitters peak high, lit walls do not)
   color: Vec3; // original light chromaticity (max channel = 1)
   group: number;
   refined?: boolean;

@@ -5,7 +5,7 @@ import { analyzer } from './analyzer';
 import { contextCrop } from './analysis';
 import { generateImage, pool, priceOf } from './openrouter';
 import {
-  GROUP_LIGHTS_PROMPT, LIGHTS_OFF_PROMPT, SINGLE_LIGHT_PROMPT, elementLightsPrompt, removeElementPrompt, scenePrompt, styleById,
+  LIGHTS_OFF_PROMPT, SINGLE_LIGHT_WITH_REFERENCE_PROMPT, elementLightsPrompt, groupLightsPrompt, removeElementPrompt, scenePrompt, styleById,
 } from './prompts';
 import type { GridGroupSpec, GridSpec, LightInfo, GroupInfo, Rect, Refinement, SceneDoc, StepLog } from './types';
 
@@ -136,9 +136,32 @@ export async function createScene(p: CreateParams, report: Report): Promise<Bund
 
 // ---------------------------------------------------------------- per-light edits
 
+/** Crop for a per-light edit: centred on the light's brightness-weighted centre, so the light is
+ *  exactly where the prompt says ("the exact centre"), with room for its glow, never more than half the picture. */
 export function refineCrop(L: LightInfo, w: number, h: number): Rect {
   const [x0, y0, x1, y1] = L.bbox;
-  return contextCrop([x0, y0, x1 - x0 + 1, y1 - y0 + 1], w, h, w / h, 3, Math.max(160, Math.round(w * 0.2)));
+  const s = Math.min(Math.max(x1 - x0 + 1, y1 - y0 + 1, 24), Math.round(w * 0.16));
+  const crop = contextCrop([L.x - s / 2, L.y - s / 2, s, s], w, h, w / h, 3.2, Math.round(w * 0.2), true);
+  const maxW = Math.round(w * 0.5);
+  if (crop[2] <= maxW) return crop;
+  return contextCrop([L.x - s / 2, L.y - s / 2, s, s], w, h, w / h, 1, maxW, true);
+}
+
+/** Lights worth a real edit: bright, compact, and not a reflection on the ground. */
+export function bestForEdits(lights: LightInfo[], w: number, h: number, waterline: number | null, n: number): number[] {
+  return lights
+    .filter((L) => {
+      const bw = L.bbox[2] - L.bbox[0], bh = L.bbox[3] - L.bbox[1];
+      return Math.hypot(bw, bh) < 0.16 * w && (waterline == null || L.y < waterline) && L.y < h * 0.97;
+    })
+    // lamps themselves peak brighter than the walls they light, so rank by peak, then size
+    .sort((a, b) => (b.peak ?? 0) * Math.sqrt(b.flux) - (a.peak ?? 0) * Math.sqrt(a.flux))
+    .reduce<LightInfo[]>((picked, L) => {
+      // keep picks apart: two edits of the same lamp are wasted money
+      if (picked.length < n && picked.every((P) => Math.hypot(P.x - L.x, P.y - L.y) > 0.08 * w)) picked.push(L);
+      return picked;
+    }, [])
+    .map((L) => L.id);
 }
 
 export function aspectString(w: number, h: number, model: { aspects: string[] }) {
@@ -167,11 +190,14 @@ export async function refineLights(b: Bundle, token: string, p: RefineParams, re
   const refinements: Refinement[] = (b.doc.refinements ?? []).filter((r) => !p.lights.some((L) => L.id === r.lightId));
   await pool(p.lights, 3, async (L) => {
     const crop = refineCrop(L, w, h);
-    const input = await analyzer().crop(b.doc, b.images, token, { kind: 'image', key: 'off' }, crop, 1024);
+    const [input, lit] = await Promise.all([
+      analyzer().crop(b.doc, b.images, token, { kind: 'image', key: 'off' }, crop, 1024),
+      analyzer().crop(b.doc, b.images, token, { kind: 'image', key: 'on' }, crop, 1024),
+    ]);
     const key = `refine_${L.id}`;
-    const r = await t.run(`L${L.id}`, () => generateImage({ key: p.key, model: p.model, resolution: '768', aspectRatio: p.aspect, prompt: SINGLE_LIGHT_PROMPT, refs: [input], signal: p.signal }), p.model, key);
+    const r = await t.run(`L${L.id}`, () => generateImage({ key: p.key, model: p.model, resolution: '768', aspectRatio: p.aspect, prompt: SINGLE_LIGHT_WITH_REFERENCE_PROMPT, refs: [input, lit], signal: p.signal }), p.model, key);
     images[key] = r.blob;
-    refinements.push({ lightId: L.id, crop, image: key });
+    refinements.push({ lightId: L.id, at: [Math.round(L.x), Math.round(L.y)], crop, image: key });
   });
   refinements.sort((a, c) => a.lightId - c.lightId);
   const doc: SceneDoc = {
@@ -179,10 +205,32 @@ export async function refineLights(b: Bundle, token: string, p: RefineParams, re
     method: 'perLight',
     refinements,
     images: { ...b.doc.images, ...Object.fromEntries(refinements.map((r) => [r.image, r.image])) },
-    steps: [...b.doc.steps, ...t.log],
-    cost: b.doc.cost + t.cost,
+    // the log describes the images the scene is made of: a replaced edit drops out
+    steps: [...b.doc.steps.filter((x) => !x.image || !t.log.some((n) => n.image === x.image)), ...t.log],
+    cost: 0,
   };
+  doc.cost = doc.steps.reduce((a, x) => a + x.cost, 0);
   return { doc, images };
+}
+
+// ---------------------------------------------------------------- repaint the dark version
+
+/** Asks for a new lights-off image. Per-light edits were made against the old one, so they are dropped. */
+export async function repaintOff(b: Bundle, p: { key: string; model: string; signal?: AbortSignal }, report: Report): Promise<Bundle> {
+  const t = new Tracker([{ id: 'off', label: 'Switching every light off again' }], report);
+  const aspect = aspectString(b.doc.width, b.doc.height, { aspects: ['21:9', '2:1', '16:9', '3:2', '7:5', '4:3', '5:4', '1:1', '4:5', '3:4', '5:7', '2:3', '9:16'] });
+  const r = await t.run('off', () => generateImage({ key: p.key, model: p.model, resolution: b.doc.resolution, aspectRatio: aspect, prompt: LIGHTS_OFF_PROMPT, refs: [b.images.on], signal: p.signal }), p.model, 'off');
+  const keep = (k: string) => k === 'on' || k === 'off';
+  const doc: SceneDoc = {
+    ...b.doc,
+    method: 'split',
+    refinements: undefined,
+    images: Object.fromEntries(Object.entries(b.doc.images).filter(([k]) => keep(k))),
+    steps: [...b.doc.steps.filter((s) => !s.image || s.image === 'on'), ...t.log],
+    cost: 0,
+  };
+  doc.cost = doc.steps.reduce((a, x) => a + x.cost, 0);
+  return { doc, images: { on: b.images.on, off: r.blob } };
 }
 
 // ---------------------------------------------------------------- the full grid (frames x lights)
@@ -239,10 +287,16 @@ export async function buildGrid(
   const images = { ...b.images };
   const spec: GridSpec = { frames: plan.frames, offsets, groups, cells: [] };
   await pool(cells, 3, async (c) => {
-    const input = await analyzer().crop(doc0, b.images, token, { kind: 'gridFrame', dx: offsets[c.f] }, c.crop, 1024);
+    // first image: this frame with every light off; second: how those lights look when on
+    const [input, lit] = await Promise.all([
+      analyzer().crop(doc0, b.images, token, { kind: 'gridFrame', dx: offsets[c.f] }, c.crop, 1024),
+      c.g.kind === 'moving'
+        ? analyzer().crop(doc0, b.images, token, { kind: 'gridFrame', dx: offsets[c.f], litElement: true }, c.crop, 1024)
+        : analyzer().crop(doc0, b.images, token, { kind: 'image', key: 'plateOn' }, c.crop, 1024),
+    ]);
     const key = `grid_f${c.f}_g${c.g.id}`;
-    const prompt = c.g.kind === 'moving' ? elementLightsPrompt(motion.element) : GROUP_LIGHTS_PROMPT;
-    const r = await t.run(`f${c.f}g${c.g.id}`, () => generateImage({ key: p.key, model: p.model, resolution: '768', aspectRatio: p.aspect, prompt, refs: [input], signal: p.signal }), p.model, key);
+    const prompt = c.g.kind === 'moving' ? elementLightsPrompt(motion.element) : groupLightsPrompt(motion.element);
+    const r = await t.run(`f${c.f}g${c.g.id}`, () => generateImage({ key: p.key, model: p.model, resolution: '768', aspectRatio: p.aspect, prompt, refs: [input, lit], signal: p.signal }), p.model, key);
     images[key] = r.blob;
     spec.cells.push({ f: c.f, g: c.g.id, crop: c.crop, image: key });
   });

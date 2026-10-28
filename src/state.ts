@@ -7,7 +7,7 @@ import type { JobStep } from './core/pipeline';
 import { DEFAULT_MODEL } from './core/openrouter';
 import { DEFAULT_PARAMS, type ModeId, type ModeParams, type SwitchFeel } from './play/engine';
 
-export type Sheet = null | 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help';
+export type Sheet = null | 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help' | 'reflections';
 
 export interface View {
   ambient: number;
@@ -100,6 +100,8 @@ export interface Store extends Settings {
   picking: boolean; // choosing lights for real edits
   picked: number[]; // light ids chosen for real edits
   recording: boolean;
+  /** image-px y of a waterline being previewed in the Reflections sheet */
+  previewWaterline: number | null;
   set: (p: Partial<Store>) => void;
   setSettings: (p: Partial<Settings>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
@@ -136,6 +138,7 @@ export const useStore = create<Store>((set, get) => ({
   picking: false,
   picked: [],
   recording: false,
+  previewWaterline: null,
   set: (p) => set(p),
   setSettings: (p) => { saveSettings(p); set(p); },
   toast: (text, kind = 'info') => {
