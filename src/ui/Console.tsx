@@ -4,7 +4,7 @@ import type { ModeId } from '../play/engine';
 import { DEFAULT_VIEW, useStore } from '../state';
 import { Fader, Segmented, Slider, Toggle } from './controls';
 import { Icon, type IconName } from './icons';
-import { stageRect } from './Stage';
+import { stageRect, TOUCH } from './Stage';
 import { switchSound, tickSound } from './sound';
 
 export const MODES: { id: ModeId; icon: IconName; name: string; help: string; key: string }[] = [
@@ -33,7 +33,7 @@ function ModeParams() {
   const radius = <Slider label="Radius" value={p.radius} min={0.03} max={0.45} def={0.14} format={pct} onChange={(radius) => up({ radius })} title="Share of the picture's width" />;
   const speed = (label = 'Speed') => <Slider label={label} value={p.speed} min={0.2} max={3} def={1} format={times} onChange={(speed) => up({ speed })} />;
   const keep = <Toggle on={p.keep} onChange={(keep) => up({ keep })} label="Keep my lights" title="Lights you switched on in Switch mode stay on" />;
-  const routeSet = !!live.engine.route;
+  const routeSet = useStore((s) => s.routeReady);
   switch (mode) {
     case 'hand':
       return (
@@ -313,7 +313,7 @@ export function Console() {
           ))}
         </div>
         <div className="modeparams">
-          <p className="modehelp">{current.help}</p>
+          <p className="modehelp">{TOUCH ? current.help.replace('Click a light to switch it. Right-click it', 'Tap a light to switch it. Hold it').replace('the cursor', 'your finger').replace('Drag', 'Drag a finger').replace('Click anywhere', 'Tap anywhere') : current.help}</p>
           <div className="modeparams__row"><ModeParams /></div>
         </div>
       </div>

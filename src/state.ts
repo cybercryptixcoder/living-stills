@@ -102,6 +102,7 @@ export interface Store extends Settings {
   recording: boolean;
   /** image-px y of a waterline being previewed in the Reflections sheet */
   previewWaterline: number | null;
+  routeReady: boolean;
   set: (p: Partial<Store>) => void;
   setSettings: (p: Partial<Settings>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
@@ -139,6 +140,7 @@ export const useStore = create<Store>((set, get) => ({
   picked: [],
   recording: false,
   previewWaterline: null,
+  routeReady: false,
   set: (p) => set(p),
   setSettings: (p) => { saveSettings(p); set(p); },
   toast: (text, kind = 'info') => {

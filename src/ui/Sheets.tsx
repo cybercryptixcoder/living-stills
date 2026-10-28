@@ -150,7 +150,7 @@ export function CreateSheet({ onClose }: { onClose: () => void }) {
           {key ? (
             <button className="btn btn--primary btn--big" disabled={!ok} onClick={go}><Icon name="spark" /><span>Paint it</span></button>
           ) : (
-            <button className="btn btn--primary btn--big" onClick={() => set({ sheet: 'settings' })}><Icon name="key" /><span>Add your OpenRouter key</span></button>
+            <button className="btn btn--primary btn--big" onClick={() => set({ sheet: 'settings' })}><Icon name="key" /><span>Add your key</span></button>
           )}
         </div>
       }>
@@ -336,7 +336,7 @@ export function GridSheet({ onClose }: { onClose: () => void }) {
         {!plate && <p className="muted">Reading the lights…</p>}
         <div className="groupchecks">
           {plate?.groups.map((g) => (
-            <label key={g.id} className={`groupcheck${chosen.includes(g.id) ? ' is-on' : ''}`}>
+            <label key={g.id} className={`groupcheck${chosen.includes(g.id) ? ' is-on' : ''}`} onPointerEnter={() => useStore.getState().set({ hoverGroup: g.id })} onPointerLeave={() => useStore.getState().set({ hoverGroup: null })}>
               <input type="checkbox" checked={chosen.includes(g.id)} onChange={(e) => setChosen(e.target.checked ? [...chosen, g.id] : chosen.filter((x) => x !== g.id))} />
               <span>Group {g.name}</span><em>{g.lights.length} lights</em>
             </label>

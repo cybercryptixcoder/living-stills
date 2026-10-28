@@ -62,6 +62,44 @@
   "demo": {
     "order": 1,
     "startMode": "hand",
-    "blurb": "The train is cut out once and loops forever. The town is split into 240 lights."
+    "blurb": "The train is cut out once and loops forever. The town is split into 240 lights.",
+    "route": [
+      [
+        76,
+        394
+      ],
+      [
+        227,
+        396
+      ],
+      [
+        378,
+        377
+      ],
+      [
+        529,
+        359
+      ],
+      [
+        680,
+        282
+      ],
+      [
+        831,
+        308
+      ],
+      [
+        982,
+        311
+      ],
+      [
+        1133,
+        323
+      ],
+      [
+        1284,
+        336
+      ]
+    ]
   }
 }

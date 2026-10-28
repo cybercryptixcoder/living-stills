@@ -86,6 +86,7 @@ export async function openBundle(b: Bundle & { source: 'example' | 'local' }, ke
     groups: a.groups.map(() => 1),
     master: 1,
     elementFader: 1,
+    routeReady: !!e.route,
     ...ui,
   });
   try { localStorage.setItem('living-stills:last', b.doc.id); } catch { /* ignore */ }

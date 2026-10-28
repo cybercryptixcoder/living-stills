@@ -7,6 +7,7 @@ import { switchSound, tickSound } from './sound';
 
 const S = () => useStore.getState();
 const GRID_FRAME_SECONDS = 1.7;
+export const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
 export interface ImageRect { x: number; y: number; w: number; h: number }
 export const stageRect: ImageRect = { x: 0, y: 0, w: 1, h: 1 };
@@ -28,6 +29,7 @@ export function Stage() {
   const picking = useStore((s) => s.picking);
   const [tip, setTip] = useState<{ x: number; y: number; title: string; sub: string } | null>(null);
   const drawing = useRef<[number, number][] | null>(null);
+  const press = useRef<{ t: number; x: number; y: number; timer: number } | null>(null);
   const ripplesUi = useRef<{ x: number; y: number; t0: number }[]>([]);
 
   // renderer + loop
@@ -225,11 +227,25 @@ export function Stage() {
       const routePts = drawing.current ?? e.route?.pts;
       if (st.mode === 'route' && routePts && routePts.length > 1) {
         octx.beginPath();
-        octx.setLineDash([2, 6]);
-        octx.strokeStyle = drawing.current ? 'rgba(255,214,140,0.8)' : 'rgba(214,220,236,0.35)';
-        octx.lineWidth = 1.5;
+        octx.setLineDash([2, 7]);
+        octx.lineCap = 'round';
+        octx.strokeStyle = drawing.current ? 'rgba(255,214,140,0.85)' : 'rgba(214,220,236,0.42)';
+        octx.lineWidth = 2;
         routePts.forEach(([x, y], k) => { const [X, Y] = toScreen(x, y); if (k) octx.lineTo(X, Y); else octx.moveTo(X, Y); });
         octx.stroke();
+        octx.setLineDash([]);
+        const rp = !drawing.current && e.routePoint();
+        if (rp) {
+          const [X, Y] = toScreen(rp[0], rp[1]);
+          const g = octx.createRadialGradient(X, Y, 0, X, Y, 14);
+          g.addColorStop(0, 'rgba(255,236,200,0.95)');
+          g.addColorStop(0.35, 'rgba(255,200,120,0.5)');
+          g.addColorStop(1, 'rgba(255,200,120,0)');
+          octx.fillStyle = g;
+          octx.beginPath();
+          octx.arc(X, Y, 14, 0, Math.PI * 2);
+          octx.fill();
+        }
       }
       const tnow = performance.now() / 1000;
       ripplesUi.current = ripplesUi.current.filter((q) => tnow - q.t0 < 1.4);
@@ -262,6 +278,7 @@ export function Stage() {
   const onMove = (ev: React.PointerEvent) => {
     const q = toImage(ev.clientX, ev.clientY);
     if (!q) return;
+    if (press.current && Math.hypot(ev.clientX - press.current.x, ev.clientY - press.current.y) > 10) { clearTimeout(press.current.timer); press.current = null; }
     const e = live.engine;
     e.pointer.x = q.x;
     e.pointer.y = q.y;
@@ -286,7 +303,7 @@ export function Stage() {
         setTip({
           x: ev.clientX - box.left, y: ev.clientY - box.top,
           title: st.scene?.doc.method === 'grid' ? (g ?? `Light ${L.id}`) : `Light ${L.id}${g ? `, group ${g}` : ''}`,
-          sub: st.picking ? (st.picked.includes(L.id) ? 'Click to leave it out' : 'Click to choose it') : 'Click to switch. Right-click for colour.',
+          sub: st.picking ? (st.picked.includes(L.id) ? 'Click to leave it out' : 'Click to choose it') : TOUCH ? 'Tap to switch. Hold for colour.' : 'Click to switch. Right-click for colour.',
         });
       } else if (i >= 0 && e.hasElement && i === e.count - 1) {
         const box = wrap.current!.getBoundingClientRect();
@@ -302,6 +319,18 @@ export function Stage() {
     const e = live.engine;
     const st = S();
     e.pointer.down = true;
+    if (ev.pointerType === 'touch') {
+      // long-press on a light opens its card (the touch version of right-click)
+      e.pointer.inside = true;
+      e.pointer.x = q.x;
+      e.pointer.y = q.y;
+      const i = pickAt(q.x, q.y, q.scale * 0.6);
+      if (press.current) clearTimeout(press.current.timer);
+      press.current = i >= 0 ? {
+        t: performance.now(), x: ev.clientX, y: ev.clientY,
+        timer: window.setTimeout(() => { S().set({ selected: i }); tickSound(); press.current = null; }, 520),
+      } : null;
+    }
     (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
     if (st.picking) {
       const i = pickAt(q.x, q.y, q.scale);
@@ -344,12 +373,14 @@ export function Stage() {
     }
   };
 
-  const onUp = () => {
+  const onUp = (ev?: React.PointerEvent) => {
     const e = live.engine;
     e.pointer.down = false;
+    if (press.current) { clearTimeout(press.current.timer); press.current = null; }
+    if (ev?.pointerType === 'touch' && S().mode !== 'trail') e.pointer.inside = false;
     if (drawing.current) {
       const route = makeRoute(drawing.current);
-      if (route) { e.route = route; e.routeS = 0; tickSound(); }
+      if (route) { e.route = route; e.routeS = 0; tickSound(); S().set({ routeReady: true }); }
       drawing.current = null;
     }
   };

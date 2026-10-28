@@ -248,9 +248,23 @@ export class Engine {
     return best;
   }
 
+  private lastMode: ModeId | null = null;
+  private modeT0 = 0;
+
+  /** Where the travelling light of Route mode is now (for drawing it). */
+  routePoint(): [number, number] | null {
+    return this.route ? routeAt(this.route, this.routeS) : null;
+  }
+
   step(dt: number) {
     this.time += dt;
     const t = this.time;
+    if (this.mode !== this.lastMode) {
+      // cycles (sweep, dusk) start from their beginning when you switch to them
+      this.lastMode = this.mode;
+      this.modeT0 = t;
+      if (this.mode === 'route') this.routeS = 0;
+    }
     const p = this.params;
     const n = this.count;
     const sp = p.speed;
@@ -277,8 +291,8 @@ export class Engine {
       for (let i = 0; i < n; i++) { const q = this.posX[i] * ux + this.posY[i] * uy; lo = Math.min(lo, q); hi = Math.max(hi, q); }
       pmin = lo; pspan = Math.max(1, hi - lo);
     }
-    const sweepPh = ((t * sp) / SWEEP_PERIOD) % 1;
-    const duskPh = ((t * sp) / DUSK_PERIOD) % 1;
+    const sweepPh = (((t - this.modeT0) * sp) / SWEEP_PERIOD) % 1;
+    const duskPh = (((t - this.modeT0) * sp) / DUSK_PERIOD) % 1;
     this.ripples = this.ripples.filter((r) => (t - r.t0) * sp * this.W * 0.35 < Math.hypot(this.W, this.H) + R);
 
     let litNum = 0, litDen = 0, cr = 0, cg = 0, cb = 0;

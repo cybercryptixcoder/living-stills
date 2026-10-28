@@ -6,3 +6,4 @@ dist
 test-results
 scratch
 public/scenes/dev-*
+.e2e
