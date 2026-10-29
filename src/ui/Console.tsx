@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { live, saveBlob, slug } from '../live';
+import { saveBlob, slug } from '../live';
 import type { ModeId } from '../play/engine';
-import { DEFAULT_VIEW, useStore } from '../state';
-import { Fader, Segmented, Slider, Toggle } from './controls';
+import { useStore } from '../state';
+import { Segmented, Slider, Toggle } from './controls';
 import { Icon, type IconName } from './icons';
 import { stageRect, TOUCH } from './Stage';
-import { switchSound, tickSound } from './sound';
+import { tickSound } from './sound';
 
 export const MODES: { id: ModeId; icon: IconName; name: string; help: string; key: string }[] = [
   { id: 'hand', icon: 'switch', name: 'Switch', help: 'Click a light to switch it. Right-click it for colour and brightness.', key: '1' },
@@ -18,6 +18,9 @@ export const MODES: { id: ModeId; icon: IconName; name: string; help: string; ke
   { id: 'flicker', icon: 'flicker', name: 'Flicker', help: 'Some lights stutter like tired bulbs. Unrest sets how many.', key: '8' },
   { id: 'dusk', icon: 'dusk', name: 'Dusk', help: 'Lights come on one by one as night falls, then go out before dawn.', key: '9' },
 ];
+
+/** The five that earn their place; the rest live behind "More". */
+const PRIMARY: ModeId[] = ['hand', 'torch', 'trail', 'sweep', 'dusk'];
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 const secs = (v: number) => `${v.toFixed(1)} s`;
@@ -75,77 +78,6 @@ function ModeParams() {
   }
 }
 
-function Channels() {
-  const scene = useStore((s) => s.scene);
-  const groups = useStore((s) => s.groups);
-  const master = useStore((s) => s.master);
-  const elementFader = useStore((s) => s.elementFader);
-  const set = useStore((s) => s.set);
-  if (!scene) return null;
-  const grid = scene.doc.method === 'grid';
-  const toggleGroup = (g: number) => {
-    const e = live.engine;
-    const anyOn = e.lights.some((L, i) => L.group === g && e.base[i] > 0.5);
-    e.setGroup(g, anyOn ? 0 : 1);
-    switchSound(!anyOn);
-  };
-  return (
-    <div className="channels" role="group" aria-label="Light channels">
-      <div className="channels__scroll">
-        {scene.groups.map((g, k) => (
-          <Fader
-            key={k}
-            label={grid ? g.name.replace(/^Lights /, '') : g.name}
-            sub={grid ? (g.kind === 'moving' ? 'moves' : '') : String(g.count)}
-            title={grid ? g.name : `Group ${g.name}, ${g.count} light${g.count === 1 ? '' : 's'}`}
-            lampId={String(k)}
-            value={groups[k] ?? 1}
-            onChange={(v) => { const next = [...groups]; next[k] = v; set({ groups: next }); }}
-            onHover={(on) => set({ hoverGroup: on ? k : null })}
-            onLabel={() => toggleGroup(k)}
-          />
-        ))}
-        {scene.hasElement && (
-          <Fader
-            label={capital(scene.elementName?.replace(/^the /, '') ?? 'Moving')}
-            sub="moves"
-            title="The moving element's own light"
-            lampId="el"
-            value={elementFader}
-            onChange={(v) => set({ elementFader: v })}
-            onHover={(on) => set({ hoverGroup: on ? -2 : null })}
-            onLabel={() => {
-              const e = live.engine, i = e.count - 1;
-              const on = e.base[i] < 0.5;
-              e.base[i] = on ? 1 : 0;
-              switchSound(on);
-            }}
-          />
-        )}
-      </div>
-      <span className="channels__rule" aria-hidden="true" />
-      <Fader label="All" wide title="Every light" lampId="all" value={master} onChange={(v) => set({ master: v })}
-        onLabel={() => { const on = live.engine.base.some((b) => b < 0.5); live.engine.setAll(on ? 1 : 0); switchSound(on); }} />
-    </div>
-  );
-}
-
-function Picture() {
-  const v = useStore((s) => s.view);
-  const set = useStore((s) => s.set);
-  const up = (patch: Partial<typeof v>) => set({ view: { ...v, ...patch } });
-  return (
-    <div className="picture" role="group" aria-label="Picture">
-      <Slider label="Moon" value={v.ambient} min={0} max={1.6} def={1} format={pct} onChange={(ambient) => up({ ambient })} title="Light that is not from the lamps: moonlight, sky" />
-      <Slider label="Exposure" value={v.exposure} min={0.4} max={2.4} def={1} format={times} onChange={(exposure) => up({ exposure })} />
-      <Slider label="Glow" value={v.glow} min={0} max={1.6} def={DEFAULT_VIEW.glow} format={pct} onChange={(glow) => up({ glow })} />
-      <Slider label="Haze" value={v.haze} min={0} max={1.6} def={DEFAULT_VIEW.haze} format={pct} onChange={(haze) => up({ haze })} />
-      <Slider label="Warmth" value={v.warmth} min={-1} max={1} def={0} format={(x) => (Math.abs(x) < 0.05 ? '0' : x > 0 ? `+${Math.round(x * 100)}` : `−${Math.round(-x * 100)}`)} onChange={(warmth) => up({ warmth })} />
-      <Slider label="Grain" value={v.grain} min={0} max={1.5} def={DEFAULT_VIEW.grain} format={pct} onChange={(grain) => up({ grain })} />
-    </div>
-  );
-}
-
 function captureCanvas(): HTMLCanvasElement | null {
   const gl = document.querySelector<HTMLCanvasElement>('.stage__gl');
   const a = useStore.getState().analysis;
@@ -161,59 +93,22 @@ function captureCanvas(): HTMLCanvasElement | null {
 function drawCapture(out: HTMLCanvasElement) {
   const gl = document.querySelector<HTMLCanvasElement>('.stage__gl')!;
   const dpr = gl.width / gl.clientWidth;
+  const box = gl.getBoundingClientRect();
   const ctx = out.getContext('2d')!;
-  ctx.drawImage(gl, stageRect.x * dpr, stageRect.y * dpr, stageRect.w * dpr, stageRect.h * dpr, 0, 0, out.width, out.height);
-}
-
-function Transport() {
-  const scene = useStore((s) => s.scene);
-  const motion = useStore((s) => s.motion);
-  const variant = useStore((s) => s.variant);
-  const set = useStore((s) => s.set);
-  if (!scene) return null;
-  const moving = scene.hasElement || scene.doc.method === 'grid';
-  return (
-    <div className="transport">
-      {moving && (
-        <>
-          <button className="key key--round" onClick={() => { set({ motion: { ...motion, playing: !motion.playing } }); tickSound(); }} aria-label={motion.playing ? 'Pause the motion' : 'Play the motion'} title={motion.playing ? 'Pause (Space)' : 'Play (Space)'}>
-            <Icon name={motion.playing ? 'pause' : 'play'} />
-          </button>
-          <Slider label="Motion" value={motion.speed} min={0.1} max={3} def={1} format={times} onChange={(speed) => set({ motion: { ...motion, speed } })} />
-          {scene.doc.method === 'grid' && (
-            <Slider label="Blend" value={motion.blend} min={0} max={1} def={0.6} format={(x) => (x < 0.02 ? 'Cut' : pct(x))} onChange={(blend) => set({ motion: { ...motion, blend } })} title="How much of each frame crossfades into the next" />
-          )}
-        </>
-      )}
-      {scene.editedLayer != null && (
-        <div className="compare">
-          <span className="param-label">Lights from</span>
-          <Segmented
-            label="Which light layers to show"
-            value={variant}
-            onChange={(v) => { set({ variant: v }); tickSound(); }}
-            options={[
-              { value: 'estimate', label: 'Split', hint: 'Every light estimated from one on and one off image' },
-              { value: 'edits', label: 'Edits', hint: 'Chosen lights replaced by their own generated edit' },
-            ]}
-          />
-        </div>
-      )}
-    </div>
+  ctx.drawImage(
+    gl,
+    (stageRect.x - box.left) * dpr, (stageRect.y - box.top) * dpr, stageRect.w * dpr, stageRect.h * dpr,
+    0, 0, out.width, out.height,
   );
 }
 
-function Actions() {
-  const showLights = useStore((s) => s.showLights);
-  const recording = useStore((s) => s.recording);
-  const cinema = useStore((s) => s.cinema);
+function Make() {
   const scene = useStore((s) => s.scene);
+  const recording = useStore((s) => s.recording);
   const set = useStore((s) => s.set);
   const toast = useStore((s) => s.toast);
   const rec = useRef<{ r: MediaRecorder; raf: number; t0: number } | null>(null);
   const [elapsed, setElapsed] = useState(0);
-
-  const all = (v: number) => { live.engine.setAll(v); switchSound(v > 0); };
 
   const snapshot = () => {
     const out = captureCanvas();
@@ -265,17 +160,19 @@ function Actions() {
   useEffect(() => () => stopRec(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="actions">
-      <button className="key" onClick={() => all(1)} title="Switch every light on (A)" aria-label="All lights on"><Icon name="sunUp" /></button>
-      <button className="key" onClick={() => all(0)} title="Switch every light off (O)" aria-label="All lights off"><Icon name="moonDown" /></button>
-      <button className={`key${showLights ? ' is-on' : ''}`} onClick={() => { set({ showLights: !showLights }); tickSound(); }} title="Show where the lights are (L)" aria-pressed={showLights} aria-label="Show lights"><Icon name="eye" /></button>
-      <span className="actions__rule" aria-hidden="true" />
-      <button className="key" onClick={snapshot} title="Save a still (PNG)" aria-label="Save a still"><Icon name="camera" /></button>
-      <button className={`key${recording ? ' is-recording' : ''}`} onClick={() => (recording ? stopRec() : startRec())} title={recording ? 'Stop and save the clip' : 'Record a clip of the picture (up to 30 s)'} aria-label={recording ? 'Stop recording' : 'Record a clip'}>
-        <Icon name={recording ? 'stop' : 'record'} />
-        {recording && <span className="rec-time">{Math.floor(elapsed)} s</span>}
+    <div className="make">
+      <button className="btn btn--quiet" onClick={snapshot} disabled={!scene} title="Save a still (PNG)">
+        <Icon name="camera" /><span>Save still</span>
       </button>
-      <button className={`key${cinema ? ' is-on' : ''}`} onClick={() => set({ cinema: !cinema })} title="Hide everything but the picture (H)" aria-label="Cinema view"><Icon name="expand" /></button>
+      <button
+        className={`btn btn--quiet${recording ? ' is-recording' : ''}`}
+        onClick={() => (recording ? stopRec() : startRec())}
+        disabled={!scene}
+        title={recording ? 'Stop and save the clip' : 'Record a clip of the picture (up to 30 s)'}
+      >
+        <Icon name={recording ? 'stop' : 'record'} />
+        <span>{recording ? `Stop · ${Math.floor(elapsed)} s` : 'Record'}</span>
+      </button>
     </div>
   );
 }
@@ -283,52 +180,46 @@ function Actions() {
 export function Console() {
   const mode = useStore((s) => s.mode);
   const set = useStore((s) => s.set);
-  const scene = useStore((s) => s.scene);
   const cinema = useStore((s) => s.cinema);
-  const [tab, setTab] = useState<'modes' | 'lights' | 'picture'>('modes');
+  const [more, setMore] = useState(false);
   const current = MODES.find((m) => m.id === mode)!;
+  const extra = MODES.filter((m) => !PRIMARY.includes(m.id));
+  const pick = (id: ModeId) => { set({ mode: id, selected: null }); tickSound(); };
+  const help = TOUCH
+    ? current.help.replace('Click a light to switch it. Right-click it', 'Tap a light to switch it. Hold it').replace('the cursor', 'your finger').replace('Drag', 'Drag a finger').replace('Click anywhere', 'Tap anywhere')
+    : current.help;
   return (
-    <section className={`console${cinema ? ' is-hidden' : ''}`} aria-label="Lighting console" data-tab={tab}>
-      <div className="console__tabs" role="tablist">
-        {(['modes', 'lights', 'picture'] as const).map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'is-on' : ''} onClick={() => setTab(t)}>
-            {t === 'modes' ? 'Modes' : t === 'lights' ? 'Channels' : 'Picture'}
-          </button>
-        ))}
-      </div>
-      <div className="console__modes">
-        <div className="modekeys" role="radiogroup" aria-label="Mode">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              role="radio"
-              aria-checked={mode === m.id}
-              className={`modekey${mode === m.id ? ' is-on' : ''}`}
-              onClick={() => { set({ mode: m.id, selected: null }); tickSound(); }}
-              title={`${m.name} (${m.key})`}
-            >
+    <section className={`console${cinema ? ' is-hidden' : ''}`} aria-label="Lighting tools">
+      <div className="console__body">
+        <div className="modes" role="radiogroup" aria-label="Mode">
+          {PRIMARY.map((id) => {
+            const m = MODES.find((x) => x.id === id)!;
+            return (
+              <button key={id} role="radio" aria-checked={mode === id} className={`chip${mode === id ? ' is-on' : ''}`} onClick={() => pick(id)} title={`${m.name} (${m.key})`}>
+                <Icon name={m.icon} />
+                <span className="chip__name">{m.name}</span>
+              </button>
+            );
+          })}
+          {more && extra.map((m) => (
+            <button key={m.id} role="radio" aria-checked={mode === m.id} className={`chip chip--small${mode === m.id ? ' is-on' : ''}`} onClick={() => pick(m.id)} title={`${m.name} (${m.key})`}>
               <Icon name={m.icon} />
-              <span>{m.name}</span>
+              <span className="chip__name">{m.name}</span>
             </button>
           ))}
+          <button className={`chip chip--more${extra.some((m) => m.id === mode) ? ' is-on' : ''}${more ? ' is-open' : ''}`} onClick={() => { setMore(!more); tickSound(); }} aria-expanded={more} aria-label="More tools" title="More tools">
+            <Icon name="more" />
+            <span className="chip__name">{extra.some((m) => m.id === mode) ? MODES.find((m) => m.id === mode)!.name : 'More'}</span>
+          </button>
         </div>
-        <div className="modeparams">
-          <p className="modehelp">{TOUCH ? current.help.replace('Click a light to switch it. Right-click it', 'Tap a light to switch it. Hold it').replace('the cursor', 'your finger').replace('Drag', 'Drag a finger').replace('Click anywhere', 'Tap anywhere') : current.help}</p>
-          <div className="modeparams__row"><ModeParams /></div>
+        <div className="console__params">
+          <p className="modehelp">{help}</p>
+          <div className="params">
+            <ModeParams />
+          </div>
         </div>
-      </div>
-      <div className="console__lights">{scene ? <Channels /> : null}</div>
-      <div className="console__picture">
-        <Picture />
-        <div className="console__side">
-          <Transport />
-          <Actions />
-        </div>
+        <Make />
       </div>
     </section>
   );
-}
-
-function capital(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }

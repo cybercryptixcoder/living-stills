@@ -66,6 +66,21 @@ export const Icons = {
   camera: () => <I><path d="M3.5 7h3l1.5-2h4l1.5 2h3v8.5h-13z" /><circle cx="10" cy="11" r="2.5" /></I>,
   help: () => <I><circle cx="10" cy="10" r="7" /><path d="M8 8a2 2 0 1 1 2.8 1.8c-.6.3-.8.7-.8 1.4" /><circle cx="10" cy="13.8" r=".6" fill="currentColor" stroke="none" /></I>,
   key: () => <I><circle cx="7" cy="10" r="3" /><path d="M10 10h7M14.5 10v2.5M16.5 10v2" /></I>,
+  heat: () => (
+    <I><path d="M3 13.5c2.2 0 2.4-7 5-7s3.2 9 5.4 9 2.2-4.5 3.6-4.5" /><circle cx="6.5" cy="6" r=".7" fill="currentColor" stroke="none" /><circle cx="14" cy="14.5" r=".7" fill="currentColor" stroke="none" /></I>
+  ),
+  dots: () => (
+    <I><circle cx="6" cy="7" r="1.3" fill="currentColor" stroke="none" /><circle cx="13.5" cy="5.5" r="1.3" fill="currentColor" stroke="none" /><circle cx="8" cy="13.5" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle cx="4.5" cy="15.5" r=".7" fill="currentColor" stroke="none" /></I>
+  ),
+  sun: () => (
+    <I><circle cx="10" cy="10" r="3.4" /><path d="M10 2.4v1.8M10 15.8v1.8M2.4 10h1.8M15.8 10h1.8M4.6 4.6l1.3 1.3M14.1 14.1l1.3 1.3M4.6 15.4 5.9 14.1M14.1 5.9l1.3-1.3" /></I>
+  ),
+  moon: () => <I><path d="M14.8 12.4A6.1 6.1 0 0 1 7.6 5.2a4.9 4.9 0 1 0 7.2 7.2z" /></I>,
+  eyeOff: () => (
+    <I><path d="M3 10s2.6-4.2 7-4.2S17 10 17 10s-2.6 4.2-7 4.2S3 10 3 10z" /><path d="M4 16 16 4" /></I>
+  ),
+  shrink: () => <I><path d="M8 3v5H3M12 3v5h5M8 17v-5H3M12 17v-5h5" /></I>,
+  more: () => <I><circle cx="4.5" cy="10" r="1.1" fill="currentColor" stroke="none" /><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none" /><circle cx="15.5" cy="10" r="1.1" fill="currentColor" stroke="none" /></I>,
 };
 
 export type IconName = keyof typeof Icons;

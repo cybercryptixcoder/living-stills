@@ -157,6 +157,7 @@ uniform float uGrain;
 uniform float uTime;
 uniform float uRadius;
 uniform float uBackdrop;
+uniform vec3 uMat;       // the flat colour behind the print (paper); 0 keeps the blurred backdrop
 uniform vec2 uCover;     // scale of the backdrop uv (cover fit)
 
 float hash(vec2 p) {
@@ -218,5 +219,7 @@ void main() {
   float lum = dot(s, vec3(0.299, 0.587, 0.114));
   float n = hash(gl_FragCoord.xy + fract(uTime * 7.31) * 911.0) - 0.5;
   s += n * uGrain * (0.045 - 0.025 * lum);
+  // The print sits on a flat mat (paper): everything outside the frame is that colour, not a backdrop.
+  s = mix(uMat, s, inside);
   o = vec4(s, 1.0);
 }`;

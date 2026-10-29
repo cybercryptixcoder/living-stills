@@ -45,6 +45,9 @@ export interface SceneState {
   waterline: number | null;
 }
 
+export type Survey = 'heat' | 'dots' | 'off';
+export type Theme = 'auto' | 'light' | 'dark';
+
 interface Settings {
   key: string;
   model: string;
@@ -52,12 +55,14 @@ interface Settings {
   aspect: string;
   sound: boolean;
   feel: SwitchFeel;
+  theme: Theme;
+  survey: Survey;
 }
 
 const SETTINGS_KEY = 'living-stills:settings';
 
 function loadSettings(): Settings {
-  const d: Settings = { key: '', model: DEFAULT_MODEL, resolution: '1K', aspect: '16:9', sound: true, feel: 'filament' };
+  const d: Settings = { key: '', model: DEFAULT_MODEL, resolution: '1K', aspect: '16:9', sound: true, feel: 'filament', theme: 'auto', survey: 'heat' };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw) return { ...d, ...JSON.parse(raw) };

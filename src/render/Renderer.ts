@@ -25,6 +25,8 @@ export interface RenderParams {
   spriteGain: [number, number, number];
   radius: number; // css px
   backdrop: number;
+  /** colour behind the picture (a paper mat); when set, the letterbox is flat instead of the blurred backdrop */
+  mat?: [number, number, number];
 }
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -294,6 +296,8 @@ export class Renderer {
     gl.uniform1f(f.u.uTime, time);
     gl.uniform1f(f.u.uRadius, p.radius * k);
     gl.uniform1f(f.u.uBackdrop, p.backdrop);
+    const mat = p.mat ?? [0, 0, 0];
+    gl.uniform3f(f.u.uMat, mat[0], mat[1], mat[2]);
     // cover fit for the backdrop
     const ca = this.cssW / this.cssH, ia = w / h;
     gl.uniform2f(f.u.uCover, ca > ia ? 1 : ia / ca, ca > ia ? ca / ia : 1);

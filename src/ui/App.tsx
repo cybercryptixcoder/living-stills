@@ -4,6 +4,7 @@ import { useStore } from '../state';
 import { Console, MODES } from './Console';
 import { JobOverlay } from './JobOverlay';
 import { LightCard } from './LightCard';
+import { ChannelsCard, LookCard, MotionCard, StageBar, StageSurvey } from './Sidebar';
 import { CreateSheet, GridSheet, HelpSheet, ReflectionsSheet, RefineSheet, ScenesSheet, SettingsSheet } from './Sheets';
 import { switchSound, tickSound } from './sound';
 import { Stage } from './Stage';
@@ -18,11 +19,29 @@ function Toasts() {
   );
 }
 
+const SURVEYS = ['heat', 'dots', 'off'] as const;
+
 export function App() {
   const sheet = useStore((s) => s.sheet);
   const cinema = useStore((s) => s.cinema);
+  const theme = useStore((s) => s.theme);
   const set = useStore((s) => s.set);
+  const setSettings = useStore((s) => s.setSettings);
   const close = () => set({ sheet: null });
+
+  // paper by day, ink by night
+  useEffect(() => {
+    const mq = matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => {
+      const t = theme === 'auto' ? (mq.matches ? 'dark' : 'light') : theme;
+      document.documentElement.dataset.theme = t;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', t === 'dark' ? '#141210' : '#EEDCC2');
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, [theme]);
 
   // first load: the last scene you had open, or the first example
   useEffect(() => {
@@ -51,7 +70,11 @@ export function App() {
           break;
         case 'a': case 'A': live.engine.setAll(1); switchSound(true); break;
         case 'o': case 'O': live.engine.setAll(0); switchSound(false); break;
-        case 'l': case 'L': st.set({ showLights: !st.showLights }); break;
+        case 'l': case 'L': {
+          const i = SURVEYS.indexOf(st.survey);
+          setSettings({ survey: SURVEYS[(i + 1) % SURVEYS.length] });
+          break;
+        }
         case 'h': case 'H': st.set({ cinema: !st.cinema }); break;
         case '[': st.set({ params: { ...st.params, radius: Math.max(0.03, st.params.radius / 1.15) } }); break;
         case ']': st.set({ params: { ...st.params, radius: Math.min(0.45, st.params.radius * 1.15) } }); break;
@@ -66,13 +89,28 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [setSettings]);
 
   return (
     <div className={`app${cinema ? ' is-cinema' : ''}`}>
-      <Stage />
-      <TopBar />
-      <Console />
+      <div className="shell">
+        <TopBar />
+        <main className="board">
+          <section className="panel panel--stage" aria-label="The painting">
+            <div className="stage-wrap">
+              <Stage />
+              <StageSurvey />
+            </div>
+            <StageBar />
+          </section>
+          <aside className="rail" aria-label="Light and look">
+            <ChannelsCard />
+            <MotionCard />
+            <LookCard />
+          </aside>
+        </main>
+        <Console />
+      </div>
       <LightCard />
       <Toasts />
       <JobOverlay />

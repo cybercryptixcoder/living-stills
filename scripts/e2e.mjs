@@ -37,6 +37,7 @@ const context = args.profile
   ? await chromium.launchPersistentContext(path.resolve(args.profile), { args: launchArgs, proxy, viewport: { width: 1440, height: 900 }, acceptDownloads: true })
   : await (await chromium.launch({ args: launchArgs, proxy })).newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
 const page = context.pages()[0] ?? (await context.newPage());
+page.setDefaultTimeout(120000);
 page.on('pageerror', (e) => { log('pageerror', e.message); failures++; });
 page.on('console', (m) => { if (m.type() === 'error') log('console error:', m.text()); });
 page.on('dialog', (d) => d.accept());
@@ -67,6 +68,12 @@ if (MOCK) {
 async function ready() {
   await page.goto(URL_);
   await page.waitForFunction(() => window.__living?.store, null, { timeout: 60000 });
+  // the scene's lights and layers arrive with the asset analysis: wait for them so the reads
+  // below never race the load (software GL takes a while to get there)
+  await page.waitForFunction(() => {
+    const s = window.__living.store.getState();
+    return !!s.analysis && !!window.__living.renderer?.rect;
+  }, null, { timeout: 180000 });
 }
 const state = (fn) => page.evaluate(fn);
 async function waitEngine(seconds) {
@@ -169,17 +176,34 @@ async function lightChecks(tag) {
   await page.keyboard.press('2');
   const r = await state(() => window.__living.renderer.rect);
   const a = await state(() => { const s = window.__living.store.getState().analysis; return { w: s.width, h: s.height, lights: s.lights.map((L) => [L.x, L.y, L.flux]) }; });
-  const best = a.lights.sort((p, q) => q[2] - p[2])[0];
+  // The torch lights whatever is under the cursor. Pick the brightest light whose
+  // neighbourhood is sparse: on software GL (about one frame per second) a dense cluster
+  // of bulbs both cools down and heats up inside the two sample windows and averages out.
+  const R_SAMPLE = 0.09; // the torch's pool of light is about this wide; sample it, not a dot
+  const density = await page.evaluate((pts) => {
+    const e = window.__living.engine, R = 0.14 * e.W;
+    return pts.map(([x, y]) => {
+      let n = 0;
+      for (let i = 0; i < e.count; i++) if (Math.hypot(e.posX[i] - x, e.posY[i] - y) < R) n++;
+      return n;
+    });
+  }, a.lights.map((l) => [l[0], l[1]]));
+  const byFlux = a.lights.map((l, i) => ({ l, n: density[i] })).sort((p, q) => q.l[2] - p.l[2]);
+  const pick = [...byFlux].sort((p, q) => Math.abs(p.n - 4) - Math.abs(q.n - 4))[0];
+  const best = pick.l;
   const tx = best[0] / a.w, ty = best[1] / a.h;
   await page.mouse.move(r.x + tx * r.w, r.y + ty * r.h);
   await waitEngine(1.2);
-  const near = await regionLum(Math.max(0, tx - 0.05), Math.max(0, ty - 0.05), Math.min(1, tx + 0.05), Math.min(1, ty + 0.05));
+  const near = await regionLum(Math.max(0, tx - R_SAMPLE), Math.max(0, ty - R_SAMPLE), Math.min(1, tx + R_SAMPLE), Math.min(1, ty + R_SAMPLE));
   const far = await regionLum(tx < 0.5 ? 0.7 : 0.05, 0.05, tx < 0.5 ? 0.95 : 0.3, 0.6);
   await page.screenshot({ path: `${OUT}/${tag}-torch.png` });
-  await page.mouse.move(r.x + (1 - tx) * r.w, r.y + (1 - ty) * r.h);
+  const hovering = await state(() => window.__living.engine.pointer.inside);
+  // aim at the point on the print farthest from the bulb, not at r.x/r.y: the print is centred,
+  // so a bulb near one edge would otherwise be un-hovered to "around the centre" and stay lit
+  await page.mouse.move(r.w - (r.x + tx * r.w), r.h - (r.y + ty * r.h));
   await waitEngine(1.2);
-  const nearAfter = await regionLum(Math.max(0, tx - 0.05), Math.max(0, ty - 0.05), Math.min(1, tx + 0.05), Math.min(1, ty + 0.05));
-  check(near > nearAfter * 1.05, `${tag}: torch lights the area under the cursor (${near.toFixed(4)} vs ${nearAfter.toFixed(4)} after moving away; far region ${far.toFixed(4)})`);
+  const nearAfter = await regionLum(Math.max(0, tx - R_SAMPLE), Math.max(0, ty - R_SAMPLE), Math.min(1, tx + R_SAMPLE), Math.min(1, ty + R_SAMPLE));
+  check(near > nearAfter * 1.05 && hovering, `${tag}: torch lights the area under the cursor (${near.toFixed(4)} vs ${nearAfter.toFixed(4)} after moving away; far region ${far.toFixed(4)}; ${pick.n} lights near the target; hover registered ${hovering})`);
   await page.keyboard.press('1');
   await page.evaluate(() => window.__living.engine.setAll(1));
 }
@@ -255,7 +279,11 @@ if (FLOW === 'play') {
     check(s.lights > 0, `${id}: has lights`);
     await lightChecks(id);
     if (s.element || s.method === 'grid') await motionCheck(id);
-    for (const k of ['3', '4', '5', '6', '7', '8', '9']) { await page.keyboard.press(k); await waitEngine(0.4); }
+    // a grid scene has no light of its own: the modes that move a light around would only show
+    // the previous frame, so walk the ones that do not need a pointer, and leave the pointer
+    // modes to the layered and split scenes (software GL renders too slowly to drive them here)
+    const modes = s.method === 'grid' ? ['7', '8', '9'] : ['3', '4', '5', '6', '7', '8', '9'];
+    for (const k of modes) { await page.keyboard.press(k); await waitEngine(0.4); }
     await page.screenshot({ path: `${OUT}/${id}-dusk.png` });
     await page.keyboard.press('1');
   }

@@ -1,4 +1,4 @@
-// Tactile controls: faders, sliders, switches. All keyboard and pointer friendly.
+// Tactile controls: sliders, channel levels, switches. All keyboard and pointer friendly.
 import { useCallback, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -22,63 +22,6 @@ function useDrag(onMove: (e: PointerEvent, el: HTMLElement) => void, onEnd?: () 
   }, [onMove, onEnd]);
 }
 
-export interface FaderProps {
-  value: number;
-  onChange: (v: number) => void;
-  label: string;
-  sub?: string;
-  title?: string;
-  /** data-group lets the console light the little lamp at frame rate */
-  lampId?: string;
-  wide?: boolean;
-  onHover?: (on: boolean) => void;
-  onLabel?: () => void;
-}
-
-/** A vertical channel fader with a lamp that shows how lit its lights are right now. */
-export function Fader({ value, onChange, label, sub, title, lampId, wide, onHover, onLabel }: FaderProps) {
-  const track = useRef<HTMLDivElement>(null);
-  const onDown = useDrag((e) => {
-    const r = track.current!.getBoundingClientRect();
-    onChange(clamp(1 - (e.clientY - r.top) / r.height, 0, 1));
-  });
-  const key = (e: KeyboardEvent) => {
-    const step = e.shiftKey ? 0.1 : 0.04;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { onChange(clamp(value + step, 0, 1)); e.preventDefault(); }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { onChange(clamp(value - step, 0, 1)); e.preventDefault(); }
-    if (e.key === 'Home') onChange(1);
-    if (e.key === 'End') onChange(0);
-  };
-  return (
-    <div className={`fader${wide ? ' fader--wide' : ''}`} onPointerEnter={() => onHover?.(true)} onPointerLeave={() => onHover?.(false)}>
-      <span className="fader__lamp" data-lamp={lampId} />
-      <div
-        className="fader__track"
-        ref={track}
-        role="slider"
-        tabIndex={0}
-        aria-label={title ?? label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(value * 100)}
-        onPointerDown={onDown}
-        onKeyDown={key}
-        onDoubleClick={() => onChange(value > 0.02 ? 0 : 1)}
-        onWheel={(e) => onChange(clamp(value - e.deltaY * 0.0015, 0, 1))}
-        style={{ ['--v' as string]: value }}
-        title={title}
-      >
-        <span className="fader__fill" />
-        <span className="fader__cap" />
-      </div>
-      <button className="fader__label" onClick={onLabel} title={onLabel ? `Switch ${label} on or off` : undefined} tabIndex={onLabel ? 0 : -1}>
-        {label}
-      </button>
-      {sub != null && <span className="fader__sub">{sub}</span>}
-    </div>
-  );
-}
-
 export interface SliderProps {
   label: string;
   value: number;
@@ -91,7 +34,7 @@ export interface SliderProps {
   title?: string;
 }
 
-/** A compact horizontal slider with its value shown in plain units. Double-click resets. */
+/** A compact horizontal slider with its value in plain units. Double-click resets. */
 export function Slider({ label, value, min, max, step = 0, def, format, onChange, title }: SliderProps) {
   const track = useRef<HTMLDivElement>(null);
   const snap = (v: number) => (step ? Math.round(v / step) * step : v);
@@ -131,6 +74,52 @@ export function Slider({ label, value, min, max, step = 0, def, format, onChange
   );
 }
 
+export interface LevelProps {
+  value: number;
+  onChange: (v: number) => void;
+  label: string;
+  /** data-lamp lets the survey light this row's bulb at frame rate */
+  lampId?: string;
+  title?: string;
+}
+
+/** A horizontal channel level: drag anywhere on the bar, double-click to cut. */
+export function Level({ value, onChange, label, lampId, title }: LevelProps) {
+  const track = useRef<HTMLDivElement>(null);
+  const onDown = useDrag((e) => {
+    const r = track.current!.getBoundingClientRect();
+    onChange(clamp((e.clientX - r.left) / r.width, 0, 1));
+  });
+  const key = (e: KeyboardEvent) => {
+    const step = e.shiftKey ? 0.1 : 0.05;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { onChange(clamp(value + step, 0, 1)); e.preventDefault(); }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { onChange(clamp(value - step, 0, 1)); e.preventDefault(); }
+    if (e.key === 'Home') onChange(1);
+    if (e.key === 'End') onChange(0);
+  };
+  return (
+    <div
+      className={`level${value < 0.02 ? ' is-down' : ''}`}
+      ref={track}
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(value * 100)}
+      title={title ?? `${label} level`}
+      onPointerDown={onDown}
+      onKeyDown={key}
+      onDoubleClick={() => onChange(value > 0.02 ? 0 : 1)}
+      style={{ ['--v' as string]: clamp(value, 0, 1) }}
+    >
+      <span className="level__fill" />
+      <span className="level__cap" />
+      <span className="level__lamp" data-lamp={lampId} aria-hidden="true" />
+    </div>
+  );
+}
+
 export function Toggle({ on, onChange, label, title }: { on: boolean; onChange: (v: boolean) => void; label: ReactNode; title?: string }) {
   return (
     <button className={`toggle${on ? ' is-on' : ''}`} role="switch" aria-checked={on} onClick={() => onChange(!on)} title={title}>
@@ -140,11 +129,12 @@ export function Toggle({ on, onChange, label, title }: { on: boolean; onChange: 
   );
 }
 
-export function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: { value: T; label: ReactNode; hint?: string }[]; onChange: (v: T) => void; label: string }) {
+export function Segmented<T extends string>({ value, options, onChange, label }: { value: T; options: { value: T; label: ReactNode; hint?: string; icon?: ReactNode }[]; onChange: (v: T) => void; label: string }) {
   return (
     <div className="segmented" role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <button key={o.value} role="radio" aria-checked={value === o.value} className={value === o.value ? 'is-on' : ''} onClick={() => onChange(o.value)} title={o.hint}>
+          {o.icon}
           {o.label}
         </button>
       ))}

@@ -30,53 +30,88 @@ function capital(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+const THEME_NEXT: Record<string, 'auto' | 'light' | 'dark'> = { auto: 'light', light: 'dark', dark: 'auto' };
+const THEME_WORD: Record<string, string> = { auto: 'Auto theme', light: 'Paper theme', dark: 'Night theme' };
+
 export function TopBar() {
   const scene = useStore((s) => s.scene);
   const key = useStore((s) => s.key);
   const cinema = useStore((s) => s.cinema);
   const spend = useStore((s) => s.spend);
+  const theme = useStore((s) => s.theme);
   const set = useStore((s) => s.set);
+  const setSettings = useStore((s) => s.setSettings);
   const open = (sheet: 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help' | 'reflections') => { set({ sheet }); tickSound(); };
   return (
     <header className={`topbar${cinema ? ' is-hidden' : ''}`}>
-      <div className="titlecard">
-        {scene ? (
-          <>
-            <h1 className="titlecard__title">{scene.doc.title}</h1>
-            <p className="titlecard__line">{methodLine(scene.doc, scene.lights)}</p>
-            <nav className="titlecard__actions" aria-label="This scene">
-              {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
-                <button onClick={() => open('refine')}>Real edits for chosen lights</button>
-              )}
-              {(scene.doc.method === 'layered' || scene.doc.method === 'grid') && (
-                <button onClick={() => open('grid')}>Paint every frame</button>
-              )}
-              {scene.doc.method !== 'grid' && <button onClick={() => open('reflections')}>Lights and reflections</button>}
-              {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
-                <button
-                  onClick={() => {
-                    const n = scene.doc.refinements?.length ?? 0;
-                    const msg = `Ask the model for a new lights-off version (one image, about 1¢). Use this if lamps vanished instead of going dark.${n ? ` The ${n} per-light edits were made against the old one and will be dropped.` : ''}`;
-                    if (useStore.getState().key && confirm(msg)) void runRepaintOff();
-                    else if (!useStore.getState().key) set({ sheet: 'settings' });
-                  }}
-                >Repaint the dark version</button>
-              )}
-              <button onClick={() => void downloadScene()}>Download scene</button>
-            </nav>
-          </>
-        ) : (
-          <h1 className="titlecard__title">Living Stills</h1>
-        )}
-      </div>
-      <div className="topbar__right">
-        {spend > 0 && <span className="spend" title="Spent on image generation in this session">{money(spend)} spent</span>}
-        <button className="btn btn--quiet" onClick={() => open('help')} aria-label="Help and shortcuts" title="Help and shortcuts (?)"><Icon name="help" /></button>
-        <button className="btn btn--quiet" onClick={() => open('scenes')} title="Scenes (S)"><Icon name="scenes" /><span>Scenes</span></button>
-        <button className="btn btn--primary" onClick={() => open('create')} title="Paint a new scene (N)"><Icon name="plus" /><span>New scene</span></button>
-        <button className={`btn btn--key${key ? ' has-key' : ''}`} onClick={() => open('settings')} title={key ? 'Settings. Your OpenRouter key is set.' : 'Settings. Add your OpenRouter key to paint new scenes.'} aria-label="Settings">
+      <div className="mast">
+        <h1 className="wordmark">Living Stills<span className="stop">.</span></h1>
+        <span className="mast__note">a lighting console for paintings</span>
+        <span className="spacer" />
+        {spend > 0 && <span className="pill pill--quiet" title="Spent on image generation in this session">{money(spend)} spent</span>}
+        <button
+          className="iconbtn"
+          onClick={() => { setSettings({ theme: THEME_NEXT[theme] }); tickSound(); }}
+          title={`${THEME_WORD[theme]} — click for ${THEME_WORD[THEME_NEXT[theme]].toLowerCase()}`}
+          aria-label={`Theme: ${THEME_WORD[theme]}. Change theme`}
+        >
+          <Icon name={theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'heat'} />
+        </button>
+        <button className="btn btn--quiet" onClick={() => open('help')} aria-label="Help and shortcuts" title="Help and shortcuts (?)">
+          <Icon name="help" /><span>Help</span>
+        </button>
+        <button className="btn btn--quiet" onClick={() => open('scenes')} title="Scenes (S)">
+          <Icon name="scenes" /><span>Scenes</span>
+        </button>
+        <button className="btn" onClick={() => open('create')} title="Paint a new scene (N)">
+          <Icon name="plus" /><span>New scene</span>
+        </button>
+        <button
+          className={`iconbtn iconbtn--key${key ? ' has-key' : ''}`}
+          onClick={() => open('settings')}
+          title={key ? 'Settings. Your OpenRouter key is set.' : 'Settings. Add your OpenRouter key to paint new scenes.'}
+          aria-label="Settings"
+        >
           <Icon name="key" /><span className="keydot" aria-hidden="true" />
         </button>
+      </div>
+
+      <div className="titleblock">
+        <div className="titleblock__text">
+          <h2 className="scene-title">{scene ? scene.doc.title : 'Living Stills'}</h2>
+          <p className="scene-line">
+            {scene ? methodLine(scene.doc, scene.lights) : 'Choose a scene, or paint a new one.'}
+          </p>
+        </div>
+        {scene && (
+          <nav className="scene-actions" aria-label="This scene">
+            {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
+              <button onClick={() => open('refine')}>Real edits for chosen lights</button>
+            )}
+            {(scene.doc.method === 'layered' || scene.doc.method === 'grid') && (
+              <button onClick={() => open('grid')}>Paint every frame</button>
+            )}
+            {scene.doc.method !== 'grid' && <button onClick={() => open('reflections')}>Lights and reflections</button>}
+            <button onClick={() => void downloadScene()}>Download scene</button>
+            {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
+              <details className="moreactions">
+                <summary>More</summary>
+                <div className="moreactions__menu">
+                  <button
+                    onClick={() => {
+                      const n = scene.doc.refinements?.length ?? 0;
+                      const msg = `Ask the model for a new lights-off version (one image, about 1¢). Use this if lamps vanished instead of going dark.${n ? ` The ${n} per-light edits were made against the old one and will be dropped.` : ''}`;
+                      if (useStore.getState().key && confirm(msg)) void runRepaintOff();
+                      else if (!useStore.getState().key) set({ sheet: 'settings' });
+                    }}
+                  >
+                    Repaint the dark version
+                  </button>
+                </div>
+              </details>
+            )}
+          </nav>
+        )}
       </div>
     </header>
   );

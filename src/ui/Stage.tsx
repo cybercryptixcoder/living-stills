@@ -10,12 +10,20 @@ const GRID_FRAME_SECONDS = 1.7;
 export const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
 export interface ImageRect { x: number; y: number; w: number; h: number }
+/** Where the print sits in VIEWPORT coordinates (the light card is anchored to it). */
 export const stageRect: ImageRect = { x: 0, y: 0, w: 1, h: 1 };
+/** The same rectangle in the stage element's own coordinates. */
+const local: ImageRect & { left: number; top: number } = { x: 0, y: 0, w: 1, h: 1, left: 0, top: 0 };
 
 function smooth(a: number, b: number, x: number) {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
   return t * t * (3 - 2 * t);
 }
+
+const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+
+/** The heat field: one splat per lit light, normalised and tinted with the one accent. */
+const HEAT_W = 180;
 
 export function Stage() {
   const wrap = useRef<HTMLDivElement>(null);
@@ -31,6 +39,7 @@ export function Stage() {
   const drawing = useRef<[number, number][] | null>(null);
   const press = useRef<{ t: number; x: number; y: number; timer: number } | null>(null);
   const ripplesUi = useRef<{ x: number; y: number; t0: number }[]>([]);
+  const heatRef = useRef<{ c: HTMLCanvasElement; ctx: CanvasRenderingContext2D; field: Float32Array; img: ImageData; w: number; h: number } | null>(null);
 
   // renderer + loop
   useEffect(() => {
@@ -48,11 +57,11 @@ export function Stage() {
     const root = document.documentElement;
     const octx = overlay.current!.getContext('2d')!;
 
+    let placed = '';
     const layout = () => {
       const el = wrap.current!;
       const cw = el.clientWidth, ch = el.clientHeight;
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      r.resize(cw, ch, dpr);
       const ov = overlay.current!;
       if (ov.width !== Math.round(cw * dpr) || ov.height !== Math.round(ch * dpr)) {
         ov.width = Math.round(cw * dpr);
@@ -61,19 +70,88 @@ export function Stage() {
       const st = S();
       const a = st.analysis;
       const aspect = a ? a.width / a.height : 16 / 9;
-      const cinema = st.cinema;
-      const consoleEl = document.querySelector('.console') as HTMLElement | null;
-      const topEl = document.querySelector('.titlecard') as HTMLElement | null;
-      const top = cinema ? 0 : Math.max(72, (topEl ? topEl.offsetTop + topEl.offsetHeight : 60) + 14);
-      const bottom = cinema ? 0 : (consoleEl?.offsetHeight ?? 120) + 32;
-      const side = cinema ? 0 : Math.max(16, Math.min(56, cw * 0.035));
-      const aw = cw - side * 2, ah = Math.max(80, ch - top - bottom);
-      let w = aw, h = aw / aspect;
-      if (h > ah) { h = ah; w = ah * aspect; }
-      const rect = { x: (cw - w) / 2, y: top + (ah - h) / 2, w, h };
-      r.rect = rect;
-      Object.assign(stageRect, rect);
+      // the print is fitted into the card; the paper-coloured mat behind it is CSS
+      let w = cw, h = cw / aspect;
+      if (h > ch) { h = ch; w = ch * aspect; }
+      const rect = { x: Math.round((cw - w) / 2), y: Math.round((ch - h) / 2), w: Math.round(w), h: Math.round(h) };
+      // the GL canvas covers exactly the print, so the mat colour comes from CSS and follows the theme
+      const gl = canvas.current!;
+      const key = `${rect.x}|${rect.y}|${rect.w}|${rect.h}|${dpr}`;
+      if (key !== placed) {
+        placed = key;
+        gl.style.left = `${rect.x}px`;
+        gl.style.top = `${rect.y}px`;
+        gl.style.width = `${rect.w}px`;
+        gl.style.height = `${rect.h}px`;
+        r.resize(rect.w, rect.h, dpr);
+        r.rect = { x: 0, y: 0, w: rect.w, h: rect.h };
+      }
+      const box = el.getBoundingClientRect();
+      Object.assign(local, rect, { left: box.left, top: box.top });
+      Object.assign(stageRect, { x: box.left + rect.x, y: box.top + rect.y, w, h });
       return { dpr, rect };
+    };
+
+    const drawHeat = (a: NonNullable<ReturnType<typeof S>['analysis']>) => {
+      const w = HEAT_W, h = Math.max(1, Math.round((HEAT_W * a.height) / a.width));
+      let hs = heatRef.current;
+      if (!hs || hs.w !== w || hs.h !== h) {
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const hctx = c.getContext('2d')!;
+        hs = { c, ctx: hctx, field: new Float32Array(w * h), img: hctx.createImageData(w, h), w, h };
+        heatRef.current = hs;
+      }
+      const e = live.engine;
+      const f = hs.field;
+      f.fill(0);
+      const px = a.width / w, py = a.height / h;
+      let max = 0;
+      const splat = (cx: number, cy: number, rCells: number, wgt: number) => {
+        const x0 = Math.max(0, Math.floor(cx - rCells)), x1 = Math.min(w - 1, Math.ceil(cx + rCells));
+        const y0 = Math.max(0, Math.floor(cy - rCells)), y1 = Math.min(h - 1, Math.ceil(cy + rCells));
+        const inv = 1 / (rCells * rCells);
+        for (let y = y0; y <= y1; y++) {
+          const dy = y - cy;
+          for (let x = x0; x <= x1; x++) {
+            const dx = x - cx;
+            const d2 = (dx * dx + dy * dy) * inv;
+            if (d2 >= 1) continue;
+            const k = 1 - d2;
+            f[y * w + x] += wgt * k * k;
+          }
+        }
+      };
+      const count = Math.min(e.lights.length, e.level.length);
+      for (let i = 0; i < count; i++) {
+        // every lamp keeps a faint ember so the survey always reads as a plan of the rig,
+        // and brightens to full heat as it is switched up
+        const lv = Math.max(e.level[i], 0.26);
+        const L = e.lights[i];
+        const cx = e.posX[i] / px, cy = e.posY[i] / py;
+        const size = Math.sqrt(Math.max(1, L.area)) / px;
+        const rCells = clamp(size * 1.25 + 1.6, 2, 26);
+        splat(cx, cy, rCells, lv * (0.55 + 0.45 * Math.min(1, L.flux / 40 + size / 40)));
+      }
+      if (e.hasElement) {
+        const i = e.count - 1;
+        splat(e.posX[i] / px, e.posY[i] / py, 12, Math.max(e.level[i], 0.3) * 0.9);
+      }
+      for (let i = 0; i < f.length; i++) if (f[i] > max) max = f[i];
+      const d = hs.img.data;
+      // fixed reference, not per-frame max: an unlit scene must stay dim, not normalise to full heat
+      const inv = 1 / Math.max(max, 0.85);
+      // one accent: ember at the edge of the field, hot cream at the core
+      const loCol = [240, 105, 42], hiCol = [255, 226, 176];
+      for (let i = 0; i < f.length; i++) {
+        const t = Math.pow(Math.min(1, f[i] * inv), 0.62);
+        const j = i * 4;
+        d[j] = loCol[0] + (hiCol[0] - loCol[0]) * t;
+        d[j + 1] = loCol[1] + (hiCol[1] - loCol[1]) * t;
+        d[j + 2] = loCol[2] + (hiCol[2] - loCol[2]) * t;
+        d[j + 3] = t < 0.01 ? 0 : Math.round(255 * (0.1 + 0.72 * t));
+      }
+      hs.ctx.putImageData(hs.img, 0, 0);
     };
 
     const loop = (now: number) => {
@@ -113,11 +191,11 @@ export function Stage() {
         const F = a.layers.length;
         if (st.motion.playing) live.gridPhase = (live.gridPhase + (dt * st.motion.speed) / GRID_FRAME_SECONDS) % F;
         const f = Math.floor(live.gridPhase);
-        const local = live.gridPhase - f;
+        const localMix = live.gridPhase - f;
         layerA = f % F;
         layerB = (f + 1) % F;
         const b = st.motion.blend;
-        mix = b <= 0.01 ? 0 : smooth(1 - b, 1, local);
+        mix = b <= 0.01 ? 0 : smooth(1 - b, 1, localMix);
         e.setFramePos(layerA, layerB, mix);
       } else if (a.editedLayer != null) {
         layerA = st.variant === 'edits' ? a.editedLayer : 0;
@@ -128,7 +206,8 @@ export function Stage() {
       const v = st.view;
       r.draw({
         layerA, layerB, mix, ambient: v.ambient, exposure: v.exposure, glow: v.glow, haze: v.haze, grain: v.grain,
-        spriteDx, spriteT: el.t, spriteGain: el.gain, radius: st.cinema ? 0 : 10, backdrop: st.cinema ? 0.2 : 0.32,
+        spriteDx, spriteT: el.t, spriteGain: el.gain, radius: 0,
+        backdrop: 0,
       }, now / 1000);
 
       // UI is lit by the scene
@@ -138,7 +217,10 @@ export function Stage() {
         const m = Math.max(...c);
         const to = (x: number) => Math.round(255 * Math.pow(Math.max(0.25, x / m), 1 / 2.2));
         root.style.setProperty('--lit-rgb', `${to(c[0])} ${to(c[1])} ${to(c[2])}`);
-        // fader lamps
+        document.querySelectorAll<HTMLElement>('[data-lit-text]').forEach((n) => {
+          n.textContent = `${Math.round(e.litness * 100)}%`;
+        });
+        // channel lamps
         const lamps = document.querySelectorAll<HTMLElement>('[data-lamp]');
         if (lamps.length) {
           const sums = new Float32Array(st.groups.length), counts = new Float32Array(st.groups.length);
@@ -177,59 +259,74 @@ export function Stage() {
         octx.arc(X, Y, rad, 0, Math.PI * 2);
         octx.fill();
       };
-      if (st.showLights || st.picking) {
+
+      // the heat map: where the light actually falls, not just where the bulbs are
+      if (st.survey === 'heat') {
+        if (frame % 4 === 0) drawHeat(a);
+        const hs = heatRef.current;
+        if (hs) {
+          octx.save();
+          octx.globalCompositeOperation = 'screen';
+          octx.imageSmoothingEnabled = true;
+          octx.imageSmoothingQuality = 'high';
+          octx.globalAlpha = 0.85;
+          octx.drawImage(hs.c, rect.x, rect.y, rect.w, rect.h);
+          octx.restore();
+        }
+      }
+      if (st.survey === 'dots' || st.picking) {
         for (let i = 0; i < e.lights.length; i++) {
           const lv = e.level[i];
           const picked = st.picked.includes(e.lights[i].id);
           const inGroup = st.hoverGroup != null && e.lights[i].group === st.hoverGroup;
           if (picked) {
-            ring(e.posX[i], e.posY[i], lightRadius(i) + 2, 'rgba(255,214,140,0.95)', 1.6);
-            dot(e.posX[i], e.posY[i], 3, 'rgba(255,214,140,1)');
+            ring(e.posX[i], e.posY[i], lightRadius(i) + 2, 'rgba(240,105,42,0.95)', 1.6);
+            dot(e.posX[i], e.posY[i], 3, 'rgba(255,190,140,1)');
           } else {
-            dot(e.posX[i], e.posY[i], inGroup ? 3.2 : 2.2, `rgba(${lv > 0.5 ? '255,226,180' : '214,220,236'},${inGroup ? 0.95 : 0.35 + 0.45 * lv})`);
+            dot(e.posX[i], e.posY[i], inGroup ? 3.2 : 2.2, `rgba(${lv > 0.5 ? '255,196,130' : '245,240,230'},${inGroup ? 0.95 : 0.3 + 0.45 * lv})`);
           }
         }
       }
       if (st.previewWaterline != null) {
         const [, Y] = toScreen(0, st.previewWaterline);
         octx.setLineDash([6, 6]);
-        octx.strokeStyle = 'rgba(160,200,255,0.8)';
+        octx.strokeStyle = 'rgba(255,226,176,0.85)';
         octx.lineWidth = 1.2;
         octx.beginPath();
         octx.moveTo(rect.x, Y);
         octx.lineTo(rect.x + rect.w, Y);
         octx.stroke();
         octx.setLineDash([]);
-        octx.fillStyle = 'rgba(200,220,255,0.85)';
-        octx.font = '12px "IBM Plex Sans", sans-serif';
+        octx.fillStyle = 'rgba(255,236,206,0.9)';
+        octx.font = '12px "Space Mono", monospace';
         octx.fillText('Reflections below this line', rect.x + 12, Y - 8);
       }
-      if (!(st.showLights || st.picking) && st.hoverGroup != null) {
+      if (st.hoverGroup != null) {
         for (let i = 0; i < e.lights.length; i++)
-          if (e.lights[i].group === st.hoverGroup) ring(e.posX[i], e.posY[i], lightRadius(i), 'rgba(214,220,236,0.75)');
+          if (e.lights[i].group === st.hoverGroup) ring(e.posX[i], e.posY[i], lightRadius(i), 'rgba(255,226,176,0.9)', 1.2);
         if (st.hoverGroup === -2 && e.hasElement) {
           const i = e.count - 1;
-          ring(e.posX[i], e.posY[i], 26, 'rgba(214,220,236,0.75)');
+          ring(e.posX[i], e.posY[i], 26, 'rgba(255,226,176,0.9)', 1.2);
         }
       }
       if (st.hovered != null && st.hovered < e.lights.length && (st.mode === 'hand' || st.picking)) {
-        ring(e.posX[st.hovered], e.posY[st.hovered], lightRadius(st.hovered) + 3, 'rgba(255,226,170,0.95)', 1.5);
+        ring(e.posX[st.hovered], e.posY[st.hovered], lightRadius(st.hovered) + 3, 'rgba(255,214,140,0.95)', 1.5);
       }
       if (st.selected != null && st.selected < e.count) {
-        ring(e.posX[st.selected], e.posY[st.selected], (st.selected < e.lights.length ? lightRadius(st.selected) : 24) + 5, 'rgba(255,214,140,0.9)', 1.2, [3, 3]);
+        ring(e.posX[st.selected], e.posY[st.selected], (st.selected < e.lights.length ? lightRadius(st.selected) : 24) + 5, 'rgba(240,105,42,0.95)', 1.4, [3, 3]);
       }
       const p = e.pointer;
       if (p.inside && !st.picking && (st.mode === 'torch' || st.mode === 'paint' || st.mode === 'trail')) {
         const R = st.params.radius * a.width * sx;
-        ring(p.x, p.y, R, 'rgba(214,220,236,0.32)', 1);
-        ring(p.x, p.y, R * (1 - st.params.softness * 0.9), 'rgba(214,220,236,0.12)', 1, [2, 4]);
+        ring(p.x, p.y, R, 'rgba(255,236,206,0.45)', 1);
+        ring(p.x, p.y, R * (1 - st.params.softness * 0.9), 'rgba(255,236,206,0.18)', 1, [2, 4]);
       }
       const routePts = drawing.current ?? e.route?.pts;
       if (st.mode === 'route' && routePts && routePts.length > 1) {
         octx.beginPath();
         octx.setLineDash([2, 7]);
         octx.lineCap = 'round';
-        octx.strokeStyle = drawing.current ? 'rgba(255,214,140,0.85)' : 'rgba(214,220,236,0.42)';
+        octx.strokeStyle = drawing.current ? 'rgba(255,214,140,0.95)' : 'rgba(255,236,206,0.55)';
         octx.lineWidth = 2;
         routePts.forEach(([x, y], k) => { const [X, Y] = toScreen(x, y); if (k) octx.lineTo(X, Y); else octx.moveTo(X, Y); });
         octx.stroke();
@@ -239,8 +336,8 @@ export function Stage() {
           const [X, Y] = toScreen(rp[0], rp[1]);
           const g = octx.createRadialGradient(X, Y, 0, X, Y, 14);
           g.addColorStop(0, 'rgba(255,236,200,0.95)');
-          g.addColorStop(0.35, 'rgba(255,200,120,0.5)');
-          g.addColorStop(1, 'rgba(255,200,120,0)');
+          g.addColorStop(0.35, 'rgba(240,140,70,0.55)');
+          g.addColorStop(1, 'rgba(240,140,70,0)');
           octx.fillStyle = g;
           octx.beginPath();
           octx.arc(X, Y, 14, 0, Math.PI * 2);
@@ -267,10 +364,10 @@ export function Stage() {
     const a = S().analysis;
     const box = wrap.current!.getBoundingClientRect();
     if (!a) return null;
-    const x = ((cx - box.left - stageRect.x) / stageRect.w) * a.width;
-    const y = ((cy - box.top - stageRect.y) / stageRect.h) * a.height;
+    const x = ((cx - box.left - local.x) / local.w) * a.width;
+    const y = ((cy - box.top - local.y) / local.h) * a.height;
     const inside = x >= 0 && y >= 0 && x < a.width && y < a.height;
-    return { x, y, inside, scale: stageRect.w / a.width };
+    return { x, y, inside, scale: local.w / a.width };
   };
 
   const pickAt = (x: number, y: number, scale: number) => live.engine.pick(x, y, 14 / scale);
@@ -302,7 +399,7 @@ export function Stage() {
         const g = st.scene?.groups[L.group]?.name;
         setTip({
           x: ev.clientX - box.left, y: ev.clientY - box.top,
-          title: st.scene?.doc.method === 'grid' ? (g ?? `Light ${L.id}`) : `Light ${L.id}${g ? `, group ${g}` : ''}`,
+          title: st.scene?.doc.method === 'grid' ? (g ?? `Light ${L.id}`) : `Light ${L.id}${g ? ` · ${g}` : ''}`,
           sub: st.picking ? (st.picked.includes(L.id) ? 'Click to leave it out' : 'Click to choose it') : TOUCH ? 'Tap to switch. Hold for colour.' : 'Click to switch. Right-click for colour.',
         });
       } else if (i >= 0 && e.hasElement && i === e.count - 1) {
@@ -406,6 +503,7 @@ export function Stage() {
         className="stage__overlay"
         style={{ cursor }}
         onPointerMove={onMove}
+        onPointerEnter={onMove}
         onPointerDown={onDown}
         onPointerUp={onUp}
         onPointerCancel={onUp}
