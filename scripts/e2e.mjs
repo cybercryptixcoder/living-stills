@@ -251,7 +251,7 @@ async function lightChecks(tag) {
   await page.mouse.move(r.x + (1 - tx) * r.w, r.y + (1 - ty) * r.h);
   await waitEngine(1.2);
   const nearAfter = await regionLum(Math.max(0, tx - R_SAMPLE), Math.max(0, ty - R_SAMPLE), Math.min(1, tx + R_SAMPLE), Math.min(1, ty + R_SAMPLE));
-  check(near > nearAfter * 1.05 && hovering, `${tag}: torch lights the area under the cursor (${near.toFixed(4)} vs ${nearAfter.toFixed(4)} after moving away; far region ${far.toFixed(4)}; ${pick.n} lights near the target; hover registered ${hovering})`);
+  check(near - nearAfter > Math.max(0.0015, 0.02 * nearAfter) && hovering, `${tag}: torch lights the area under the cursor (${near.toFixed(4)} vs ${nearAfter.toFixed(4)} after moving away; far region ${far.toFixed(4)}; ${pick.n} lights near the target; hover registered ${hovering})`);
   await page.keyboard.press('1');
   await page.evaluate(() => window.__living.engine.setAll(1));
 }

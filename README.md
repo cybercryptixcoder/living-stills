@@ -4,7 +4,7 @@ Bring a still picture to life. Every lamp, window, sign and glowing thing in a g
 
 Everything runs in the browser. Your keys stay in your browser: images are requested straight from OpenRouter, and director requests go to Luminal through a small relay (see below).
 
-**Live site:** https://cybercryptixcoder.github.io/living-stills/
+**Live site:** https://cybercryptixcoder.github.io/living-stills/ · **3D preview** (the `splat` branch: Gaussian splats you can look around): https://cybercryptixcoder.github.io/living-stills/splat/
 
 ## How it works: two images, many lights
 

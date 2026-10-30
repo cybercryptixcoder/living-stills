@@ -1,8 +1,9 @@
 name: Publish site
 
+# main is published at the root; the splat branch (the 3D preview) at /splat/.
 on:
   push:
-    branches: [main]
+    branches: [main, splat]
   workflow_dispatch:
 
 permissions:
@@ -17,16 +18,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+      - uses: actions/checkout@v4
+        with:
+          ref: splat
+          path: splat
+        continue-on-error: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
+      - name: Build main
+        working-directory: main
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Build the 3D preview (splat branch)
+        if: hashFiles('splat/package.json') != ''
+        working-directory: splat
+        run: |
+          npm ci
+          npm run build
+          mkdir -p ../main/dist/splat
+          cp -r dist/. ../main/dist/splat/
       - name: Push the built site to gh-pages
         run: |
-          cd dist
+          cd main/dist
           touch .nojekyll
           git init -q -b gh-pages
           git config user.name "cybercryptixcoder"
