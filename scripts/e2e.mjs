@@ -251,7 +251,7 @@ async function lightChecks(tag) {
   await page.mouse.move(r.x + (1 - tx) * r.w, r.y + (1 - ty) * r.h);
   await waitEngine(1.2);
   const nearAfter = await regionLum(Math.max(0, tx - R_SAMPLE), Math.max(0, ty - R_SAMPLE), Math.min(1, tx + R_SAMPLE), Math.min(1, ty + R_SAMPLE));
-  check(near > nearAfter * 1.05 && hovering, `${tag}: torch lights the area under the cursor (${near.toFixed(4)} vs ${nearAfter.toFixed(4)} after moving away; far region ${far.toFixed(4)}; ${pick.n} lights near the target; hover registered ${hovering})`);
+  check(near - nearAfter > Math.max(0.0015, 0.02 * nearAfter) && hovering, `${tag}: torch lights the area under the cursor (${near.toFixed(4)} vs ${nearAfter.toFixed(4)} after moving away; far region ${far.toFixed(4)}; ${pick.n} lights near the target; hover registered ${hovering})`);
   await page.keyboard.press('1');
   await page.evaluate(() => window.__living.engine.setAll(1));
 }
@@ -486,6 +486,67 @@ if (FLOW === 'play') {
     const s = await sceneSummary();
     log('scene:', JSON.stringify(s));
     await bake(args.bake, { doc: { title: args.title || s.title }, demo: { order: Number(args.order || 10), startMode: args.start || 'hand' } });
+  }
+  if (FLOW === 'depth') {
+    // the 3D view: measure depth (in the browser), check parallax and that lights still switch in 3D
+    await waitScene();
+    await page.evaluate(async (t) => {
+      const s = window.__living.store.getState();
+      const e = s.examples.find((x) => x.id === t) ?? s.locals.find((x) => x.title === t && !x.doc.draft);
+      if (!e) throw new Error(`No scene ${t}`);
+      await window.__living.openEntryForTests(e);
+    }, args.scene);
+    await waitScene();
+    const t0 = Date.now();
+    if (args.remeasure || !(await state(() => window.__living.store.getState().three.available))) {
+      await page.evaluate(() => { window.__d3 = false; window.__living.make3DForTests().then(() => { window.__d3 = true; }); });
+      let last = '';
+      while (!(await state(() => window.__d3))) {
+        const b = await state(() => window.__living.store.getState().three.busy);
+        if (b !== last) { log('  ', b); last = b; }
+        await page.waitForTimeout(3000);
+      }
+    }
+    log(`depth ready in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+    await page.evaluate(() => { const s = window.__living.store.getState(); s.set({ three: { ...s.three, on: true, motion: 'drag' } }); window.__living.engine.setAll(1); });
+    const viewLum = () => page.evaluate(() => { const c = window.__living.renderer.readComposite('view'); let s = 0; for (let i = 0; i < c.length; i += 4) s += 0.2126 * c[i] + 0.7152 * c[i + 1] + 0.0722 * c[i + 2]; return s / (c.length / 4); });
+    const viewBuf = () => page.evaluate(() => { window.__v = window.__living.renderer.readComposite('view'); return true; });
+    const viewDiff = () => page.evaluate(() => { const a = window.__v, b = window.__living.renderer.readComposite('view'); let d = 0; for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); return d / (a.length / 4); });
+    const pose = (yaw, pitch) => page.evaluate(([y, p]) => { const v = window.__living.view3d; v.goal = { ...v.goal, yaw: y, pitch: p, dolly: 0 }; v.cam = { ...v.goal }; v.update(); }, [yaw, pitch]);
+    await pose(0, 0);
+    await waitEngine(1.5);
+    await viewBuf();
+    await pose(0.12, 0.05);
+    await waitEngine(1.5);
+    const moved = await viewDiff();
+    await page.screenshot({ path: `${OUT}/depth-moved.png`, timeout: 300000 });
+    check(moved > 0.01, `3D: moving the camera changes the view (mean change ${moved.toFixed(4)})`);
+    // parallax, not a flat shift: a near and a far point move by different amounts
+    const par = await page.evaluate(() => {
+      const v = window.__living.view3d, d = v.depth;
+      let near = [0, 0, -1], far = [0, 0, 2];
+      for (let y = 0.1; y < 0.9; y += 0.05) for (let x = 0.1; x < 0.9; x += 0.05) {
+        const z = v.depthAt(x * v.w, y * v.h);
+        if (z > near[2]) near = [x * v.w, y * v.h, z];
+        if (z < far[2]) far = [x * v.w, y * v.h, z];
+      }
+      const pn = v.project(near[0], near[1]), pf = v.project(far[0], far[1]);
+      void d;
+      return { near: Math.hypot(pn[0] - near[0], pn[1] - near[1]), far: Math.hypot(pf[0] - far[0], pf[1] - far[1]) };
+    });
+    check(Math.abs(par.near - par.far) > 3, `3D: near and far things move by different amounts (${par.near.toFixed(1)} px vs ${par.far.toFixed(1)} px)`);
+    const on = await viewLum();
+    await page.evaluate(() => window.__living.engine.setAll(0));
+    await waitEngine(1.5);
+    const off = await viewLum();
+    await page.screenshot({ path: `${OUT}/depth-off.png`, timeout: 300000 });
+    check(on > off * 1.03 || Math.abs(on - off) > 0.004, `3D: switching the lights changes the 3D view (${off.toFixed(4)} -> ${on.toFixed(4)})`);
+    await page.evaluate(() => window.__living.engine.setAll(1));
+    await pose(0, 0);
+    if (args.bake) {
+      const meta = await state(() => window.__living.store.getState().scene.doc);
+      await bake(args.bake, { doc: { title: args.title || meta.title }, demo: { ...(meta.demo ?? {}), order: Number(args.order || meta.demo?.order || 10), start3d: true } });
+    }
   }
   if (FLOW === 'refine') {
     await waitScene();

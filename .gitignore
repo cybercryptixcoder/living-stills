@@ -10,3 +10,6 @@ public/scenes/dev-*
 dist-test
 .e2e*
 dist-run
+dist-test
+dist-run
+.e2e*

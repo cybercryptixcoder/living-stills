@@ -2,6 +2,8 @@
 // blur pyramid for glow and the backdrop, then a final pass to the screen.
 
 import type { LayerData, SpriteData } from '../core/types';
+import { NORMALIZE, SPLAT_FRAG, SPLAT_VERT, SPRITE_FRAG, SPRITE_VERT } from '../splat/shaders';
+import { FLOATS_PER_POINT, type SplatGeometry } from '../splat/view';
 import { COMPOSITE, DOWN, FINAL, UP, VERT } from './shaders';
 
 export interface RenderInput {
@@ -30,6 +32,21 @@ export interface RenderParams {
   backdrop: number;
   /** colour behind the picture (a paper mat); when set, the letterbox is flat instead of the blurred backdrop */
   mat?: [number, number, number];
+  /** the 3D view (splats); off draws the flat picture */
+  view3d?: View3DParams;
+}
+
+export interface View3DParams {
+  view: Float32Array; // mat4, original camera -> moved camera
+  focal: number;
+  zoom: number;
+  zRange: [number, number];
+  eye: [number, number, number];
+  size: number; // splat size multiplier
+  spec: number; // highlight strength
+  glow3d: number; // glow sprite strength
+  lights: { pos: Float32Array; col: Float32Array; count: number }; // up to 8: xyz reach, rgb
+  sprites: { data: Float32Array; count: number }; // per sprite: x, y, d, size, r, g, b
 }
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -41,7 +58,18 @@ const LEVELS = 6;
 
 export class Renderer {
   readonly gl: WebGL2RenderingContext;
-  private progs: Record<'comp' | 'down' | 'up' | 'final', Prog>;
+  private progs: Record<'comp' | 'down' | 'up' | 'final' | 'norm', Prog>;
+  private splatProg: Prog;
+  private spriteProg: Prog;
+  private splatVao: WebGLVertexArrayObject;
+  private splatBuf: WebGLBuffer;
+  private splatCount = 0;
+  private splatStride = 2;
+  private spriteVao: WebGLVertexArrayObject;
+  private spriteBuf: WebGLBuffer;
+  private acc: Target | null = null;
+  private view: Target | null = null;
+  private depthRb: WebGLRenderbuffer | null = null;
   private vao: WebGLVertexArrayObject;
   private tex: Record<string, WebGLTexture | null> = {};
   private scene: Target | null = null;
@@ -55,24 +83,47 @@ export class Renderer {
   private dpr = 1;
   rect: Rect = { x: 0, y: 0, w: 1, h: 1 };
   lost = false;
+  /** software rendering (no GPU): the 3D view uses fewer splats */
+  software = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
     if (!gl) throw new Error('This browser cannot run WebGL2, which Living Stills needs to draw the lights.');
     this.gl = gl;
     this.floatFb = !!gl.getExtension('EXT_color_buffer_float');
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
+    this.software = /swiftshader|llvmpipe|software/i.test(name);
     gl.getExtension('OES_texture_float_linear');
     this.progs = {
       comp: this.program(COMPOSITE),
       down: this.program(DOWN),
       up: this.program(UP),
       final: this.program(FINAL),
+      norm: this.program(NORMALIZE),
     };
     this.vao = gl.createVertexArray()!;
+    this.splatProg = this.program(SPLAT_FRAG, SPLAT_VERT);
+    this.spriteProg = this.program(SPRITE_FRAG, SPRITE_VERT);
+    this.splatBuf = gl.createBuffer()!;
+    this.splatVao = gl.createVertexArray()!;
+    gl.bindVertexArray(this.splatVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.splatBuf);
+    const S = FLOATS_PER_POINT * 4;
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, S, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 16);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, S, 28);
+    this.spriteBuf = gl.createBuffer()!;
+    this.spriteVao = gl.createVertexArray()!;
+    gl.bindVertexArray(this.spriteVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteBuf);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 28, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 28, 16);
+    gl.bindVertexArray(null);
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
   }
 
-  private program(frag: string): Prog {
+  private program(frag: string, vert: string = VERT): Prog {
     const gl = this.gl;
     const sh = (type: number, src: string) => {
       const s = gl.createShader(type)!;
@@ -82,7 +133,7 @@ export class Renderer {
       return s;
     };
     const p = gl.createProgram()!;
-    gl.attachShader(p, sh(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vert));
     gl.attachShader(p, sh(gl.FRAGMENT_SHADER, frag));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`Link error: ${gl.getProgramInfoLog(p)}`);
@@ -126,7 +177,7 @@ export class Renderer {
     this.tex[name] = t;
   }
 
-  private target(w: number, h: number, count = 1): Target {
+  private target(w: number, h: number, count = 1, levels = 1): Target {
     const gl = this.gl;
     const fb = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
@@ -136,13 +187,128 @@ export class Renderer {
       const t = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, t);
       this.texParams(gl.TEXTURE_2D, gl.LINEAR);
-      gl.texStorage2D(gl.TEXTURE_2D, 1, internal, w, h);
+      if (levels > 1) gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+      gl.texStorage2D(gl.TEXTURE_2D, levels, internal, w, h);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0);
       tex.push(t);
     }
     gl.drawBuffers(tex.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return { fb, tex, w, h };
+  }
+
+  /** The splats for the 3D view (null removes them). */
+  setSplats(g: SplatGeometry | null) {
+    const gl = this.gl;
+    this.splatCount = g?.count ?? 0;
+    this.splatStride = g?.stride ?? 2;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.splatBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, g?.data ?? new Float32Array(0), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  get hasSplats() {
+    return this.splatCount > 0;
+  }
+
+  private makeView(w: number, h: number) {
+    const gl = this.gl;
+    [this.acc, this.view].forEach((t) => this.freeTarget(t));
+    if (this.depthRb) gl.deleteRenderbuffer(this.depthRb);
+    this.depthRb = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, this.depthRb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
+    this.acc = this.target(w, h, 2, 7); // mip levels: holes are filled from coarser levels (pull-push)
+    this.view = this.target(w, h, 2);
+    for (const t of [this.acc, this.view]) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.depthRb);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** Lifts the composite into 3D: visibility, accumulation, normalisation, then glow sprites. */
+  private drawSplats(v: View3DParams) {
+    const gl = this.gl;
+    const { w, h } = this.input!;
+    if (!this.acc || this.acc.w !== w || this.acc.h !== h) this.makeView(w, h);
+    const acc = this.acc!, view = this.view!;
+    const sp = this.splatProg;
+    const camera = (prog: Prog) => {
+      gl.uniform2f(prog.u.uImg, w, h);
+      gl.uniform1f(prog.u.uFocal, v.focal);
+      gl.uniform2f(prog.u.uZ, v.zRange[0], v.zRange[1]);
+      gl.uniformMatrix4fv(prog.u.uView, false, v.view);
+      gl.uniform1f(prog.u.uStride, this.splatStride);
+      gl.uniform1f(prog.u.uZoom, v.zoom);
+    };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fb);
+    gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(sp.p);
+    camera(sp);
+    this.bindTex(sp, 'uColor', 0, this.scene!.tex[0]);
+    this.bindTex(sp, 'uLight', 1, this.scene!.tex[1]);
+    gl.uniform1f(sp.u.uSize, v.size);
+    gl.uniform3f(sp.u.uEye, ...v.eye);
+    gl.uniform1i(sp.u.uLights, v.lights.count);
+    if (v.lights.count) {
+      gl.uniform4fv(sp.u['uLPos[0]'], v.lights.pos);
+      gl.uniform3fv(sp.u['uLCol[0]'], v.lights.col);
+    }
+    gl.uniform1f(sp.u.uSpec, v.spec);
+    gl.bindVertexArray(this.splatVao);
+    // 1. visibility
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.depthMask(true);
+    gl.colorMask(false, false, false, false);
+    gl.uniform1i(sp.u.uPass, 0);
+    gl.drawArrays(gl.POINTS, 0, this.splatCount);
+    // 2. accumulation within the depth tolerance
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.uniform1i(sp.u.uPass, 1);
+    gl.drawArrays(gl.POINTS, 0, this.splatCount);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    for (const t of acc.tex) { gl.bindTexture(gl.TEXTURE_2D, t); gl.generateMipmap(gl.TEXTURE_2D); }
+    // 3. normalise into the view target; sparse spots take colour from coarser levels
+    gl.bindVertexArray(this.vao);
+    const n = this.progs.norm;
+    gl.useProgram(n.p);
+    this.bindTex(n, 'uAccC', 0, acc.tex[0]);
+    this.bindTex(n, 'uAccL', 1, acc.tex[1]);
+    this.bindTex(n, 'uBack', 2, this.backDown[1]?.tex[0] ?? acc.tex[0]);
+    this.pass(view);
+    // 4. glow sprites, hidden behind nearer surfaces
+    if (v.sprites.count && v.glow3d > 0) {
+      const s = this.spriteProg;
+      gl.useProgram(s.p);
+      camera(s);
+      gl.uniform1f(s.u.uGlow3d, v.glow3d);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.spriteBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, v.sprites.data.subarray(0, v.sprites.count * 7), gl.DYNAMIC_DRAW);
+      gl.bindVertexArray(this.spriteVao);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, view.fb);
+      gl.viewport(0, 0, w, h);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.depthMask(false);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.drawArrays(gl.POINTS, 0, v.sprites.count);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.DEPTH_TEST);
+      gl.depthMask(true);
+    }
+    gl.bindVertexArray(this.vao);
+    return view;
   }
 
   private freeTarget(t: Target | null) {
@@ -271,8 +437,15 @@ export class Renderer {
         s = t.tex[0]; w0 = t.w; h0 = t.h;
       }
     };
-    down(this.scene.tex[1], w, h, this.glowDown);
-    down(this.scene.tex[0], w, h, this.backDown);
+    let src: Target = this.scene;
+    if (p.view3d && this.splatCount) {
+      // the backdrop pyramid of the flat picture fills holes in the 3D view
+      down(this.scene.tex[0], w, h, this.backDown);
+      src = this.drawSplats(p.view3d);
+      gl.useProgram(d.p);
+    }
+    down(src.tex[1], w, h, this.glowDown);
+    if (src === this.scene) down(this.scene.tex[0], w, h, this.backDown);
     const u = this.progs.up;
     gl.useProgram(u.p);
     const weights = [0.5 * p.glow, 0.42 * p.glow, 0.28 * p.glow + 0.22 * p.haze, 0.45 * p.haze, 0.6 * p.haze, 0.75 * p.haze];
@@ -289,7 +462,7 @@ export class Renderer {
     // 3. to screen
     const f = this.progs.final;
     gl.useProgram(f.p);
-    this.bindTex(f, 'uScene', 0, this.scene.tex[0]);
+    this.bindTex(f, 'uScene', 0, src.tex[0]);
     this.bindTex(f, 'uGlow', 1, this.glowUp[0].tex[0]);
     const back = this.backDown[4];
     this.bindTex(f, 'uBack', 2, back.tex[0]);
@@ -312,10 +485,10 @@ export class Renderer {
   }
 
   /** Linear composite at image resolution (before glow and tone mapping), for tests. */
-  readComposite(): Float32Array | null {
+  readComposite(which: 'flat' | 'view' = 'flat'): Float32Array | null {
     const gl = this.gl;
     if (!this.scene) return null;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.scene.fb);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, which === 'view' && this.view ? this.view.fb : this.scene.fb);
     gl.readBuffer(gl.COLOR_ATTACHMENT0);
     const out = new Float32Array(this.scene.w * this.scene.h * 4);
     gl.readPixels(0, 0, this.scene.w, this.scene.h, gl.RGBA, gl.FLOAT, out);
@@ -343,5 +516,8 @@ export class Renderer {
     this.freeTarget(this.scene);
     [...this.glowDown, ...this.glowUp, ...this.backDown].forEach((t) => this.freeTarget(t));
     Object.values(this.progs).forEach((p) => gl.deleteProgram(p.p));
+    [this.acc, this.view].forEach((t) => this.freeTarget(t));
+    gl.deleteProgram(this.splatProg.p);
+    gl.deleteProgram(this.spriteProg.p);
   }
 }

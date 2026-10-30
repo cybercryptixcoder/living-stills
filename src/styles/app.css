@@ -176,6 +176,8 @@ em { font-style: normal; color: var(--muted); }
 .pill.is-current small { color: rgba(28, 26, 23, 0.6); }
 .pill--director { background: var(--teal); color: var(--on-accent); }
 .pill--director.is-current { background: var(--ink); color: var(--card); }
+.pill--three { background: var(--blue); color: var(--on-accent); }
+.pill--three.is-busy { background: var(--card-2); color: var(--ink); opacity: 1; }
 .pill.is-recording { background: var(--accent); color: var(--on-accent); animation: rec 1.4s infinite; }
 @keyframes rec { 50% { box-shadow: 0 0 0 5px var(--accent-soft); } }
 

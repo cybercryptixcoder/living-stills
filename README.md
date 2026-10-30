@@ -6,6 +6,19 @@ Everything runs in the browser. Your keys stay in your browser: images are reque
 
 **Live site:** https://cybercryptixcoder.github.io/living-stills/
 
+## 3D: Gaussian splats you can look around (this branch)
+
+*Make it 3D* turns any scene into a small 3D space: move the cursor over the picture and the view turns with it (or drag, or let it sway). The lights keep working in 3D: switch, dim, recolour, presets, the director and music all show up in the 3D view at once, and the brightest lights glow at their real place in space, hidden by whatever is nearer.
+
+How it is built (free, all in the browser):
+
+1. **Depth.** Depth Anything V2 runs in the browser through transformers.js (WebGPU, or WebAssembly without a GPU). A quick pass with the small model (~27 MB, downloaded once) shows the 3D view in seconds; a detailed pass with the base model (~100 MB) replaces it a minute or two later. Both are snapped to the picture's own edges with a guided filter (He, Sun and Tang 2010), so outlines in depth match outlines in the picture, and "flying pixels" on outlines are snapped to the nearer side.
+2. **Splats.** Every pixel becomes a Gaussian splat placed on its camera ray at its depth, the lifting Flash3D (Szymanowicz et al. 2024) learns from monocular depth. A sparse second layer sits behind depth edges and fills what a moving camera uncovers.
+3. **Rendering.** Surface splatting (Zwicker et al. 2001): a visibility pass, a Gaussian-weighted accumulation within a depth tolerance, and a normalisation, so no sorting is needed. Where splats spread thin, colour comes from coarser levels (pull-push).
+4. **Light in 3D.** Splats take their colour from the relit picture every frame. The brightest lights also add glow sprites at their 3D positions and soft highlights on broad surfaces (normals from the smoothed depth), which slide as the camera moves.
+
+The depth map is kept with the scene (and with the examples), so it is measured once.
+
 ## How it works: two images, many lights
 
 Light adds up. Take the same picture once with its lights on and once with them off. The difference is the light itself, and any mix of lights is the dark picture plus a share of that difference:

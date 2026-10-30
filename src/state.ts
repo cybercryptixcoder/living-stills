@@ -10,7 +10,7 @@ import type { Show } from './play/show';
 import type { Zone } from './play/zones';
 
 export type Sheet = null | 'scenes' | 'create' | 'settings' | 'help' | 'reflections' | 'refine' | 'studio';
-export type Menu = null | 'effects' | 'presets' | 'look' | 'capture' | 'scene';
+export type Menu = null | 'effects' | 'presets' | 'look' | 'capture' | 'scene' | 'three';
 
 export interface View {
   ambient: number;
@@ -60,6 +60,18 @@ export interface DirectorTurn {
   role: 'you' | 'director';
   text: string;
   show?: Show;
+}
+
+export interface ThreeState {
+  available: boolean; // the scene has a depth map
+  on: boolean;
+  busy: string | null; // progress text while measuring depth
+  motion: 'follow' | 'drag' | 'sway';
+  strength: number; // depth strength
+  amount: number; // how far the camera may move
+  spec: number; // highlights from the lights
+  glow3d: number; // glow at the lights' places in space
+  detail: 'fine' | 'fast';
 }
 
 export interface DirectorState {
@@ -143,6 +155,7 @@ export interface Store extends Settings {
   playing: { name: string; id?: string; loop: boolean } | null;
   music: { source: 'mic' | 'tab' | null; error?: string; sensitivity: number };
   director: DirectorState;
+  three: ThreeState;
   set: (p: Partial<Store>) => void;
   setSettings: (p: Partial<Settings>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
@@ -184,6 +197,7 @@ export const useStore = create<Store>((set, get) => ({
   playing: null,
   music: { source: null, sensitivity: 1 },
   director: { open: false, busy: false, draft: '', thinking: '', turns: [] },
+  three: { available: false, on: false, busy: null, motion: 'follow', strength: 1, amount: 1, spec: 0.25, glow3d: 0.5, detail: 'fine' },
   set: (p) => set(p),
   setSettings: (p) => { saveSettings(p); set(p); },
   toast: (text, kind = 'info') => {

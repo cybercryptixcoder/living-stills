@@ -2,11 +2,66 @@ import { useEffect, useRef, useState } from 'react';
 import { live, selectedIndices } from '../live';
 import { audio } from '../play/audio';
 import { makeRoute } from '../play/engine';
-import { Renderer } from '../render/Renderer';
+import { Renderer, type View3DParams } from '../render/Renderer';
+import { Engine } from '../play/engine';
 import { useStore } from '../state';
 import { switchSound, tickSound } from './sound';
 
 const S = () => useStore.getState();
+
+/** Screen position of the pointer over the print (0..1), for the 3D camera; and drag state. */
+const raw = { x: 0.5, y: 0.5, inside: false, drag: null as null | { x: number; y: number; yaw: number; pitch: number; moved: boolean } };
+const SPEC = { pos: new Float32Array(32), col: new Float32Array(24) };
+const SPRITES = new Float32Array(64 * 7);
+const is3d = () => S().three.on && !!live.renderer?.hasSplats;
+
+/** Camera goal for this frame, the brightest lights for highlights and glow sprites. */
+function view3dParams(dt: number, t: number): View3DParams {
+  const st = S(), three = st.three, v = live.view3d, e = live.engine;
+  const A = 0.11 * three.amount;
+  if (three.motion === 'follow') {
+    const k = raw.inside ? 1 : 0;
+    v.goal.yaw = -(raw.x - 0.5) * 2 * A * k;
+    v.goal.pitch = (raw.y - 0.5) * 2 * A * 0.55 * k;
+    v.goal.dolly = raw.inside ? 0.04 * three.amount : 0;
+  } else if (three.motion === 'sway') {
+    v.goal.yaw = Math.sin(t * 0.35) * A * 0.8;
+    v.goal.pitch = Math.sin(t * 0.23 + 1.3) * A * 0.35;
+    v.goal.dolly = (0.5 + 0.5 * Math.sin(t * 0.17)) * 0.06 * three.amount;
+  }
+  v.goal.strength = three.strength;
+  v.step(dt);
+  // lights: by how much light they are giving right now
+  const T = e.lightTable();
+  const order = e.lights.map((L, i) => ({ L, i, s: L.flux * Math.max(0, e.level[i]) })).filter((o) => o.s > 0.001).sort((a, b) => b.s - a.s);
+  const nSpec = Math.min(8, order.length);
+  const reach = 0.28 * v.pivot;
+  const maxFlux = order[0]?.s || 1;
+  for (let k = 0; k < nSpec; k++) {
+    const { L, s } = order[k];
+    const p = v.lift(L.x, L.y, v.depthAt(L.x, L.y));
+    SPEC.pos.set([p[0], p[1], p[2] * 0.97, reach], k * 4);
+    const g = [T[L.id * 4], T[L.id * 4 + 1], T[L.id * 4 + 2]];
+    const m = Math.sqrt(s / maxFlux) * 1.6;
+    SPEC.col.set([L.color[0] * g[0] * m, L.color[1] * g[1] * m, L.color[2] * g[2] * m], k * 3);
+  }
+  const nSprites = Math.min(64, order.length);
+  const scale = v.w / 1360;
+  for (let k = 0; k < nSprites; k++) {
+    const { L, s } = order[k];
+    const g = [T[L.id * 4], T[L.id * 4 + 1], T[L.id * 4 + 2]];
+    const size = Math.min(110, Math.max(12, Math.sqrt(L.area) * 2.6 + 16)) * scale;
+    const m = 0.35 + 0.65 * Math.sqrt(s / maxFlux);
+    SPRITES.set([L.x, L.y, v.depthAt(L.x, L.y), size, L.color[0] * g[0] * m, L.color[1] * g[1] * m, L.color[2] * g[2] * m], k * 7);
+  }
+  return {
+    view: v.view, focal: v.focal, zoom: v.zoom, zRange: v.zRange, eye: v.eye, size: 1,
+    spec: three.spec, glow3d: three.glow3d,
+    lights: { pos: SPEC.pos, col: SPEC.col, count: nSpec },
+    sprites: { data: SPRITES, count: nSprites },
+  };
+}
+void Engine;
 export const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
 export interface ImageRect { x: number; y: number; w: number; h: number }
@@ -190,10 +245,11 @@ export function Stage() {
       r.setTable(e.lightTable());
       const el = e.elementOutput();
       const v = st.view;
+      const view3d = is3d() ? view3dParams(dt, now / 1000) : undefined;
       r.draw({
         layerA, layerB, mix, ambient: v.ambient, daylight: v.daylight, exposure: v.exposure, glow: v.glow, haze: v.haze, grain: v.grain,
         spriteDx, spriteT: el.t, spriteGain: el.gain, radius: 0,
-        backdrop: 0,
+        backdrop: 0, view3d,
       }, now / 1000);
 
       // UI is lit by the scene
@@ -214,7 +270,12 @@ export function Stage() {
 
       // overlay
       const sx = rect.w / a.width;
-      const toScreen = (x: number, y: number): [number, number] => [rect.x + x * sx, rect.y + y * sx];
+      const flat = !view3d;
+      const toScreen = (x: number, y: number): [number, number] => {
+        if (flat) return [rect.x + x * sx, rect.y + y * sx];
+        const [px, py] = live.view3d.project(x, y);
+        return [rect.x + px * sx, rect.y + py * sx];
+      };
       const ring = (x: number, y: number, rad: number, color: string, width = 1, dash?: number[]) => {
         const [X, Y] = toScreen(x, y);
         octx.beginPath();
@@ -356,9 +417,12 @@ export function Stage() {
     const a = S().analysis;
     const box = wrap.current!.getBoundingClientRect();
     if (!a) return null;
-    const x = ((cx - box.left - local.x) / local.w) * a.width;
-    const y = ((cy - box.top - local.y) / local.h) * a.height;
+    let x = ((cx - box.left - local.x) / local.w) * a.width;
+    let y = ((cy - box.top - local.y) / local.h) * a.height;
     const inside = x >= 0 && y >= 0 && x < a.width && y < a.height;
+    raw.x = x / a.width; raw.y = y / a.height; raw.inside = inside;
+    // in 3D, find the point of the picture that is under the cursor in the moved view
+    if (is3d() && inside) [x, y] = live.view3d.unproject(x, y);
     return { x, y, inside, scale: local.w / a.width };
   };
 

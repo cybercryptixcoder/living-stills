@@ -97,6 +97,8 @@ export interface SceneDoc {
     route?: [number, number][];
     startMode?: string;
     order?: number;
+    /** open in the 3D view */
+    start3d?: boolean;
   };
 }
 

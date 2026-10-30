@@ -16,6 +16,8 @@ import { BUILT_IN, type Preset } from './play/presets';
 import { usesMusic, type Show } from './play/show';
 import { computeZones, zonesFromGroups, zonesKey, type Zone } from './play/zones';
 import type { Renderer } from './render/Renderer';
+import { depthFromPng, depthToPng, estimateDepth, refineDepth, type DepthMap } from './splat/depth';
+import { buildSplats, View3D } from './splat/view';
 import { DEFAULT_VIEW, useStore, type SceneState } from './state';
 
 export const live = {
@@ -27,6 +29,8 @@ export const live = {
   abort: null as AbortController | null,
   /** the two-stage draft open in the studio */
   draft: null as (Bundle & { source: 'local' }) | null,
+  /** the 3D view: camera and depth */
+  view3d: new View3D(),
 };
 
 (window as unknown as { __living: typeof live & { store: typeof useStore } }).__living = Object.assign(live, { store: useStore });
@@ -106,6 +110,7 @@ export async function openBundle(b: Bundle & { source: 'example' | 'local' }, ke
     ...ui,
   });
   if (!keepUi && startMode === 'dusk') playPreset(BUILT_IN.find((p) => p.id === 'dusk')!);
+  await setupDepth(b, !keepUi && !!b.doc.demo?.start3d);
   try { localStorage.setItem('living-stills:last', b.doc.id); } catch { /* ignore */ }
   if (!labels) void ensureLabels();
 }
@@ -304,7 +309,17 @@ export async function exportForExamples(): Promise<{ doc: unknown; files: Record
 }
 (window as unknown as { __exportScene: typeof exportForExamples }).__exportScene = exportForExamples;
 
-Object.assign(live, { openEntryForTests: openEntry });
+Object.assign(live, { openEntryForTests: openEntry, make3DForTests: () => make3D() });
+// test hook: depth for the open scene's lit image
+Object.assign(live, {
+  depthTest: async () => {
+    const { estimateDepth } = await import('./splat/depth');
+    const t0 = performance.now();
+    const d = await estimateDepth(live.bundle!.images.on, (p, t) => console.log('depth', t, Math.round(p * 100)));
+    let s = 0; for (const v of d.data) s += v;
+    return { w: d.w, h: d.h, mean: s / d.data.length, ms: performance.now() - t0 };
+  },
+});
 
 function capital(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -504,5 +519,104 @@ export async function listen(source: 'mic' | 'tab' | null) {
   } catch (err) {
     const msg = (err as Error).name === 'NotAllowedError' ? 'Permission to listen was not given.' : (err as Error).message;
     set({ music: { ...S().music, source: null, error: msg } });
+  }
+}
+
+// ---------------------------------------------------------------- 3D (Gaussian splats from depth)
+
+/** Splat spacing: fine on a real GPU, coarse on software rendering (tests) and phones. */
+function finalStride(): number {
+  const forced = Number(new URLSearchParams(location.search).get('splatStride')) || 0;
+  if (forced) return forced;
+  if (live.renderer?.software) return 5;
+  if (S().three.detail === 'fast' || matchMedia('(pointer: coarse)').matches) return 2;
+  return 1;
+}
+
+let buildSeq = 0;
+/** Shows the splats coarse first, then at full detail a moment later (building a million points takes a second). */
+function showSplats(b: Bundle, depth: DepthMap) {
+  const r = live.renderer, v = live.view3d;
+  if (!r) return;
+  const seq = ++buildSeq;
+  v.setScene(depth, b.doc.width, b.doc.height);
+  const target = finalStride();
+  const first = Math.max(target, r.software ? target : 3);
+  r.setSplats(buildSplats(v, b.doc.width, b.doc.height, first));
+  if (first !== target) {
+    setTimeout(() => {
+      if (seq !== buildSeq || live.bundle !== b) return;
+      r.setSplats(buildSplats(v, b.doc.width, b.doc.height, target));
+    }, 60);
+  }
+}
+
+/** Loads the scene's depth map (if it has one) and builds its splats. */
+async function setupDepth(b: Bundle, start3d: boolean) {
+  const r = live.renderer, v = live.view3d;
+  const three = S().three;
+  if (!r) return;
+  if (!b.images.depth) {
+    r.setSplats(null);
+    v.depth = null;
+    S().set({ three: { ...three, available: false, on: false, busy: null } });
+    return;
+  }
+  const depth = await depthFromPng(b.images.depth);
+  if (live.bundle !== b) return;
+  v.cam = { yaw: 0, pitch: 0, dolly: 0, strength: three.strength };
+  v.goal = { ...v.cam };
+  showSplats(b, depth);
+  S().set({ three: { ...S().three, available: true, on: start3d || S().three.on, busy: null } });
+}
+
+/** Rebuilds the splats at a new level of detail (the 3D menu). */
+export function rebuildSplats() {
+  const b = live.bundle, d = live.view3d.depth;
+  if (b && d) showSplats(b, d);
+}
+
+async function pictureRGBA(b: Bundle): Promise<Uint8ClampedArray> {
+  const bmp = await createImageBitmap(b.images.on ?? b.images.off);
+  const c = new OffscreenCanvas(b.doc.width, b.doc.height);
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(bmp, 0, 0, b.doc.width, b.doc.height);
+  bmp.close();
+  return ctx.getImageData(0, 0, b.doc.width, b.doc.height).data;
+}
+
+/**
+ * Measures depth for the open scene in the browser (free) and keeps it with the scene. Progressive:
+ * a quick pass with the small model shows the 3D view within seconds; a detailed pass with the larger
+ * model follows and replaces it. Both have their edges snapped to the picture's edges.
+ */
+export async function make3D() {
+  const b = live.bundle;
+  if (!b) return;
+  const set = (patch: Partial<ReturnType<typeof S>['three']>) => S().set({ three: { ...S().three, ...patch } });
+  const keep = async (d: DepthMap) => {
+    const png = await depthToPng(d);
+    b.images = { ...b.images, depth: png };
+    b.doc = { ...b.doc, images: { ...b.doc.images, depth: 'depth' } };
+    if (b.source === 'local') { await saveLocal(b); await refreshLibrary(); }
+  };
+  try {
+    set({ busy: 'Loading the depth model' });
+    const src = b.images.on ?? b.images.off;
+    const rgba = await pictureRGBA(b);
+    const progress = (p: number, text: string) => set({ busy: p < 1 ? `${text} · ${Math.round(p * 100)}%` : text });
+    const quick = refineDepth(await estimateDepth(src, progress, 'small'), rgba, b.doc.width, b.doc.height);
+    if (live.bundle !== b) return;
+    await keep(quick);
+    await setupDepth(b, true);
+    set({ busy: 'Adding detail' });
+    const fine = refineDepth(await estimateDepth(src, (p, t) => set({ busy: p < 1 ? `${t} · ${Math.round(p * 100)}%` : 'Adding detail' }), 'base'), rgba, b.doc.width, b.doc.height);
+    if (live.bundle !== b) return;
+    await keep(fine);
+    showSplats(b, fine);
+    set({ busy: null, available: true });
+  } catch (err) {
+    set({ busy: null });
+    S().toast(`Could not measure depth: ${(err as Error).message}`, 'error');
   }
 }

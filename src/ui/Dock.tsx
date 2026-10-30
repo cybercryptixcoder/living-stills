@@ -2,7 +2,7 @@
 // item says what it is for. Only the controls of what is active show on the row itself.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { listen, live, playPreset, removeLocal, runRepaintOff, saveBlob, slug, stopShow, downloadScene } from '../live';
+import { listen, live, make3D, rebuildSplats, playPreset, removeLocal, runRepaintOff, saveBlob, slug, stopShow, downloadScene } from '../live';
 import type { ModeId, MusicMap } from '../play/engine';
 import { BUILT_IN, deletePreset, loadSaved, type Preset } from '../play/presets';
 import { DEFAULT_VIEW, useStore, type Menu } from '../state';
@@ -380,6 +380,60 @@ function SceneMenu() {
   );
 }
 
+// ---------------------------------------------------------------- 3D
+
+function ThreeMenu() {
+  const three = useStore((s) => s.three);
+  const scene = useStore((s) => s.scene);
+  const set = useStore((s) => s.set);
+  const up = (patch: Partial<typeof three>) => set({ three: { ...useStore.getState().three, ...patch } });
+  if (!scene) return null;
+  if (!three.available) {
+    return (
+      <button className={`pill pill--three${three.busy ? ' is-busy' : ''}`} onClick={() => { if (!three.busy) void make3D(); }} disabled={!!three.busy} data-testid="make-3d" title="Measure depth in your browser (free) and turn the picture into 3D splats">
+        <Icon name="cube" /><span className="pill__label">{three.busy ?? 'Make it 3D'}</span>
+      </button>
+    );
+  }
+  return (
+    <MenuButton id="three" icon="cube" label={<><small>3D</small>{three.busy ? 'Adding detail' : three.on ? 'On' : 'Off'}</>} current={three.on} testid="menu-three">
+      <p className="menu__title">3D <span>the picture as Gaussian splats you can look around</span></p>
+      <div className="look">
+        <div className="look__row">
+          <span className="slider__label">3D view</span>
+          <Toggle on={three.on} onChange={(on) => { up({ on }); live.view3d.goal = { ...live.view3d.goal, yaw: 0, pitch: 0, dolly: 0 }; tickSound(); }} label={three.on ? 'On' : 'Off'} />
+        </div>
+        <div className="look__row">
+          <span className="slider__label">Camera</span>
+          <Segmented label="How the camera moves" value={three.motion} onChange={(motion) => { up({ motion }); live.view3d.goal = { ...live.view3d.goal, yaw: 0, pitch: 0, dolly: 0 }; tickSound(); }} options={[
+            { value: 'follow', label: 'Follow cursor', hint: 'Look around as you move the pointer over the picture' },
+            { value: 'drag', label: 'Drag', hint: 'Drag the empty parts of the picture to turn' },
+            { value: 'sway', label: 'Sway', hint: 'Drifts slowly on its own' },
+          ]} />
+        </div>
+        <div className="look__row">
+          <span className="slider__label">Detail</span>
+          <Segmented label="Detail" value={three.detail} onChange={(detail) => { up({ detail }); setTimeout(rebuildSplats, 0); tickSound(); }} options={[
+            { value: 'fine', label: 'Every pixel', hint: 'One splat per pixel: full texture detail' },
+            { value: 'fast', label: 'Lighter', hint: 'One splat per 2×2 pixels: for slower devices' },
+          ]} />
+        </div>
+        {three.busy ? <p className="look__help">{three.busy}…</p> : (
+          <button className="linkbtn" onClick={() => void make3D()} title="Runs both depth models again (free, a minute or two)">Measure depth again</button>
+        )}
+        <Slider label="Movement" value={three.amount} min={0.2} max={2.5} def={1} format={(v) => `${v.toFixed(1)}×`} onChange={(amount) => up({ amount })} />
+        <p className="look__help">How far the camera may move.</p>
+        <Slider label="Depth" value={three.strength} min={0.2} max={3} def={1} format={(v) => `${v.toFixed(1)}×`} onChange={(strength) => up({ strength })} />
+        <p className="look__help">How deep the scene is: more makes near things pop out further.</p>
+        <Slider label="Highlights" value={three.spec} min={0} max={2} def={0.6} format={(v) => `${Math.round(v * 100)}%`} onChange={(spec) => up({ spec })} />
+        <p className="look__help">Glints from the brightest lights that slide over surfaces as you move.</p>
+        <Slider label="Glow in space" value={three.glow3d} min={0} max={2} def={0.5} format={(v) => `${Math.round(v * 100)}%`} onChange={(glow3d) => up({ glow3d })} />
+        <p className="look__help">A glow at each light's place in space; nearer things hide it.</p>
+      </div>
+    </MenuButton>
+  );
+}
+
 // ---------------------------------------------------------------- the dock
 
 export function Dock() {
@@ -402,6 +456,7 @@ export function Dock() {
         >
           <Icon name="wand" /><span className="pill__label">Director</span>
         </button>
+        <ThreeMenu />
       </div>
       <div className="dock__params"><EffectParams /></div>
       <div className="dock__right">
