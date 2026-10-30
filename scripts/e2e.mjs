@@ -550,6 +550,24 @@ if (FLOW === 'play') {
       await bake(args.bake, { doc: { title: args.title || meta.title }, demo: { ...(meta.demo ?? {}), order: Number(args.order || meta.demo?.order || 10), start3d: true } });
     }
   }
+  if (FLOW === 'spaceview') {
+    // look at an already-made 3D space (e.g. a baked example) from several angles; no spend
+    await waitScene();
+    await page.evaluate(async (t) => {
+      const s = window.__living.store.getState();
+      const e = s.examples.find((x) => x.id === t) ?? s.locals.find((x) => x.title === t && !x.doc.draft);
+      await window.__living.openEntryForTests(e);
+    }, args.scene);
+    await waitScene();
+    for (let i = 0; i < 200 && !(await state(() => window.__living.store.getState().space.available)); i++) await page.waitForTimeout(3000);
+    await page.evaluate(() => { const s = window.__living.store.getState(); s.set({ space: { ...s.space, on: true } }); window.__living.engine.setAll(1); });
+    for (const y of String(args.yaws || '0,40,90,180').split(',').map(Number)) {
+      await page.evaluate((v) => { const c = window.__living.envCam; c.goal.yaw = v; c.yaw = v; }, y);
+      await waitEngine(1.5);
+      await page.screenshot({ path: `${OUT}/view-${args.scene}-${y}.png`, timeout: 300000 });
+      log(`shot ${args.scene} at ${y}°`);
+    }
+  }
   if (FLOW === 'space') {
     // the 3D space: views from around the scene (6 images), their depth, then walk round it
     await waitScene();
@@ -561,7 +579,7 @@ if (FLOW === 'play') {
     await waitScene();
     const before = await spent();
     const t0 = Date.now();
-    await page.evaluate(() => { window.__sp = false; window.__living.makeSpaceForTests().then(() => { window.__sp = true; }); });
+    await page.evaluate((m) => { window.__sp = false; window.__living.makeSpaceForTests(m).then(() => { window.__sp = true; }); }, args.mode || 'around');
     let last = '';
     while (!(await state(() => window.__sp))) {
       const b = await state(() => { const s = window.__living.store.getState(); return s.job ? s.job.steps.map((x) => `${x.label}:${x.status}`).join(' | ') + (s.job.error ? ` ERROR ${s.job.error}` : '') : s.space.busy; });
@@ -575,7 +593,7 @@ if (FLOW === 'play') {
     const shot = async (yaw, name) => {
       await page.evaluate((y) => { const c = window.__living.envCam; c.goal.yaw = y; c.yaw = y; }, yaw);
       await waitEngine(1.5);
-      await page.screenshot({ path: `${OUT}/space-${name}.png`, timeout: 300000 });
+      await page.screenshot({ path: `${OUT}/space-${args.mode === 'panorama' ? 'pano-' : ''}${name}.png`, timeout: 300000 });
       return page.evaluate(() => { const c = window.__living.renderer.readComposite('view'); let s = 0; for (let i = 0; i < c.length; i += 4) s += c[i] + c[i + 1] + c[i + 2]; return s / c.length; });
     };
     const a0 = await shot(0, 'front');

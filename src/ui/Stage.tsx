@@ -651,6 +651,18 @@ export function Stage() {
     if (orbitDrag.on) {
       orbitDrag.on = false;
       if (!orbitDrag.moved && S().selection) S().set({ selection: null });
+      // walking round: come to rest at the nearest angle a view was drawn from (in between, two imagined
+      // views are blended and look softer), unless it is within a few degrees of where it was let go
+      const g = live.env, cam = live.envCam;
+      if (orbitDrag.moved && g && g.mode === 'around' && g.angles.length > 1) {
+        const y = cam.goal.yaw;
+        let best = y, bd = Infinity;
+        for (const a of g.angles) {
+          const d = ((a - y) % 360 + 540) % 360 - 180;
+          if (Math.abs(d) < Math.abs(bd)) { bd = d; best = y + d; }
+        }
+        if (Math.abs(bd) > 4) cam.goal.yaw = best;
+      }
       return;
     }
     const e = live.engine;

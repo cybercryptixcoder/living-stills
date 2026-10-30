@@ -225,6 +225,9 @@ void main() {
   vW = vw;
   if (uPass == 0) { vColor = vec3(0.0); vLight = vec3(0.0); return; }
   vec2 uv = (aSrc + 0.5) / uImg;
+  // fade each view out towards its left and right edges, so neighbouring views cross-fade instead of
+  // meeting at a hard seam (only the weights' ratio matters, so a view alone there still shows fully)
+  vW = vw * (0.06 + 0.94 * smoothstep(0.0, 0.14, min(uv.x, 1.0 - uv.x)));
   vec3 col, lit;
   if (k == 0) {
     col = textureLod(uColor, uv, 0.0).rgb;

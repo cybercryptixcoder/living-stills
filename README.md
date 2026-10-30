@@ -19,6 +19,17 @@ How it is built (free, all in the browser):
 
 The depth map is kept with the scene (and with the examples), so it is measured once.
 
+### 3D space: see it from all sides
+
+Parallax only moves a little around the original camera. **3D space** goes further: the image model draws the same place from three more angles (90°, 180°, 270°), each lit and unlit (6 images, about 5¢), guided by a description of the scene that DeepSeek writes first. Depth is measured for each view, and the views are placed in one space and blended by the direction you look from. The lights keep working: the original view is relit light by light, the other views follow how lit the scene is.
+
+Two ways to make it, from the *3D space* menu:
+
+- **Walk round it**: the camera circles a centre point facing inwards (an object, a shopfront). Example: *Tokyo izakaya, night*.
+- **Look around from here**: the camera stays put and turns to face outwards, like a panorama (a room, a street). Example: *Bookshop, look around*.
+
+The other angles are imagined by the image model, so they are believable rather than exact. Views look best at the angles they were drawn from; in between, two views cross-fade.
+
 ## How it works: two images, many lights
 
 Light adds up. Take the same picture once with its lights on and once with them off. The difference is the light itself, and any mix of lights is the dark picture plus a share of that difference:

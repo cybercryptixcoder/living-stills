@@ -29,8 +29,8 @@ The user's overarching theme: **take something static and put life into it.** Su
   They live only in a scratchpad env file outside the repo. Grep before committing.
 - **Image spend cap:** the user raised it to **$1 total** for this round (originally $0.50). Text (Luminal /
   DeepSeek) is unlimited. Check spend with `GET https://openrouter.ai/api/v1/key` (field `usage`).
-  Baseline at the start of this round: `usage = 0.4887`. At ~04:00 it was ~0.64 (≈15¢ this round) plus a
-  3D-space run in progress (≤5.4¢).
+  Baseline at the start of this round: `usage = 0.4887`. After the Tokyo and bookshop 3D spaces (5.4¢ each)
+  the round's image spend is ≈26¢ of the $1.
 - **Images only from OpenRouter; all text/LLM from Luminal (DeepSeek V4.1 Flash).** Do not use OpenRouter
   for text.
 - **Testing means live, end to end, with real model calls**, through the real UI (Playwright). Mocks are only
@@ -90,17 +90,23 @@ Legend: ✅ done and tested live · 🟡 done, needs more work/testing · ⏳ no
     - ✅ Quality pass: one splat per pixel on GPU, progressive detail (quick small model → detailed base
       model), guided-filter edge snapping, flying-pixel removal, no artificial speckle, pull-push hole fill,
       background layer behind depth edges.
-    - 🟡 **3D space** (user's later message): the image model draws the same place from other angles around a
-      centre point (4 views total), depth for each, merged into one space you can walk round. Separate
-      feature/button from Parallax ("Parallax" and "3D space"), same branch. Implemented; first live run on
-      the Tokyo izakaya was in progress at handoff time — check `scratch/space-tokyo.log` /
-      `test-results/space-*.png` in the `ls-splat` worktree, judge the quality honestly, iterate.
-    - 🟡 **Two variants of the 3D space** (user, 03:54): (1) *walk round it*: camera circles the centre facing
-      inwards; (2) *look around from here*: camera stays put and turns facing outwards (a panorama). Only the
-      prompts and the geometry differ (`mode: 'around' | 'panorama'` in `planOrbit`, `orbitViewPrompt`,
-      `makeOrbit`, `buildEnv`, `alignViews`, `EnvCamera.update`). Both implemented; panorama not yet tested live.
-    - 🟡 Photometric alignment of the drawn views (`alignViews`: small scale/angle search against the nearest
-      placed view; result kept in `doc.orbit.align`). Implemented, not yet judged visually.
+    - ✅ **3D space** (user's later message): the image model draws the same place from other angles around a
+      centre point (4 views total, each lit and unlit = 6 new images ≈ 5.4¢), depth for each, merged into one
+      space. Separate feature/button from Parallax ("Parallax" and "3D space"), same branch. Live-tested:
+      Tokyo izakaya (walk round it, 593 s) and bookshop (look around, 521 s), both baked as examples.
+      **Honest verdict**: at the drawn angles (front/right/back/left) it looks like believable sides of the
+      same place. Weak spots: (a) *walk round it* at in-between angles (e.g. 40°): one view's geometry is seen
+      obliquely, so depth-map ripples show as streaks/bending before the next view takes over; (b) *look
+      around* shows seams where two drawn views meet (they don't continue each other exactly, and 4 views of
+      52° FOV don't cover 360°). Edge cross-fading between views was added after these runs (ENV_VERT
+      `vW` edge feather). Further fixes are in §8.
+    - ✅ **Two variants of the 3D space** (user, 03:54): (1) *walk round it* (`space-around`): camera circles
+      the centre facing inwards; (2) *look around from here* (`space-panorama`): camera stays put and turns
+      facing outwards. Only the prompts and the geometry differ (`mode: 'around' | 'panorama'` in `planOrbit`,
+      `orbitViewPrompt`, `makeOrbit`, `buildEnv`, `alignViews`, `EnvCamera.update`). Both tested live.
+    - 🟡 Photometric alignment of the drawn views (`alignViews`, result kept in `doc.orbit.align`). For the
+      bookshop panorama it found no better offset (all 0) — views barely overlap in panorama mode. Tokyo was
+      made before alignment existed; it aligns on first open.
     - ⏳ Research-driven quality upgrades (see §8).
 13. ✅ Commit/push often; Pages publishes `main` at `/` and `splat` at `/splat/` (one workflow on both
     branches).
@@ -193,6 +199,11 @@ orbit<angle>On/Off/Depth), `markers`, `labels`, `orbit`, `demo` (start3d, startS
   *frozen* build (`vite build --outDir dist-test` + `ROOT=dist-test PORT=… node scripts/serve.mjs`), not the
   dev server (HMR reloads break runs). `pkill -f <pattern>` inside a command that contains the same pattern
   kills its own shell. The container has 2 cores: don't run two browser tests at once.
+- 3D space: monocular depth is fine head-on but its ripples become visible streaks when a view is seen
+  ~40° off-axis (walk round it). In panorama mode 4 views of 52° FOV leave angular gaps; seams show where
+  drawn views meet. The image model does keep the place recognisable across views (Klein with the original
+  + nearest finished view as references).
+- `scripts/e2e.mjs` throws without `OPENROUTER_KEY` in the env even for free flows: source the keys file.
 - Chromium's fake microphone is silent unless given a file: e2e passes `scripts/fixtures/beat.wav`.
 - Depth Pro ONNX is 600 MB–3.8 GB (too heavy for a browser default). MoGe-2 ViT-B ONNX exists
   (`Ruicheng/moge-2-vitb-normal-onnx`, 419 MB, custom pre/post-processing) — candidate, see §8.
@@ -213,11 +224,19 @@ orbit<angle>On/Off/Depth), `markers`, `labels`, `orbit`, `demo` (start3d, startS
 
 ## 8. What's next (agreed plan; stick to it)
 
-1. **Judge the 3D space** (Tokyo run): if the other views are consistent enough, bake it into the Tokyo
-   example (`--bake tokyo`) and make one more (bookshop or cabin). If they drift badly, keep the feature but
-   improve: (a) photometric alignment of each view (search small scale/yaw offsets that best match the
-   neighbouring view where they overlap), (b) generate at 60° steps (5–6 views) for more overlap, (c) stronger
-   planner prompts. Keep Parallax as the reliable default.
+1. **3D space quality** (both variants work and are baked: `tokyo` = walk round it, `bookshop-pano` = look
+   around). Improve, in this order:
+   (a) *more views*: 8 views at 45° (`angles` in `makeSpace`/`planOrbit`/`makeOrbit`; `uVW[8]` already fits
+   view 0 + 7) — halves the gap between views, ~11¢ per space; for the panorama this is needed for full 360°
+   coverage (4 × 52° FOV leaves gaps). Could be a "More angles" option in the 3D space menu.
+   (b) *per-splat ray-angle weight*: pass each view's camera position (`M_k·(0,0,−R)`) as `uCam[8]` and
+   weight a splat by how close the current ray to it is to the ray it was drawn with, so stretched oblique
+   splats give way to a better view per pixel (helps walk-round at in-between angles).
+   (c) *joint multi-view depth*: align the views' point clouds with each other (ICP on the overlaps, or a
+   multi-view model such as VGGT/MASt3R if one runs in the browser) instead of per-view relative depth.
+   (d) smoother walls: stronger edge-aware smoothing of depth for the space only (planar surfaces bend less).
+   Keep Parallax as the reliable default. `node scripts/e2e.mjs --flow spaceview --scene <id> --yaws 0,40,90`
+   screenshots an existing space for free.
 2. Re-bake detailed depth for remaining examples (bookshop's depth is still the old quick one): run
    `scratch/bake3d.sh` in `ls-splat` (bookshop, starry, arcade, viaduct, car).
 3. Quality research items, in order: MoGe-2 (metric point map + FOV + normals → less bending, sharper; via
