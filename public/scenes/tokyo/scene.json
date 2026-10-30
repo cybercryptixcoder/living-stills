@@ -13,7 +13,16 @@
   "images": {
     "on": "on.jpg",
     "off": "off.jpg",
-    "depth": "depth.png"
+    "depth": "depth.png",
+    "orbit90On": "orbit90On.jpg",
+    "orbit90Off": "orbit90Off.jpg",
+    "orbit180On": "orbit180On.jpg",
+    "orbit180Off": "orbit180Off.jpg",
+    "orbit270On": "orbit270On.jpg",
+    "orbit270Off": "orbit270Off.jpg",
+    "orbit90Depth": "orbit90Depth.png",
+    "orbit180Depth": "orbit180Depth.png",
+    "orbit270Depth": "orbit270Depth.png"
   },
   "steps": [
     {
@@ -29,9 +38,51 @@
       "cost": 0.009,
       "ms": 10976,
       "image": "off"
+    },
+    {
+      "label": "Drawing the view from 90°",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9962,
+      "image": "orbit90On"
+    },
+    {
+      "label": "Drawing the view from 270°",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9744,
+      "image": "orbit270On"
+    },
+    {
+      "label": "Its lights off (90°)",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10674,
+      "image": "orbit90Off"
+    },
+    {
+      "label": "Its lights off (270°)",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9702,
+      "image": "orbit270Off"
+    },
+    {
+      "label": "Drawing the view from 180°",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 15906,
+      "image": "orbit180On"
+    },
+    {
+      "label": "Its lights off (180°)",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9395,
+      "image": "orbit180Off"
     }
   ],
-  "cost": 0.018,
+  "cost": 0.072,
   "labels": {
     "summary": "A rainy evening street scene featuring a traditional Japanese izakaya with warm glowing windows, lanterns, and a vending machine.",
     "zones": {
@@ -54,5 +105,13 @@
     "order": 1,
     "startMode": "hand",
     "start3d": true
+  },
+  "orbit": {
+    "angles": [
+      90,
+      180,
+      270
+    ],
+    "layout": "A two-story wooden izakaya on a narrow, wet street at night. The front facade faces the viewer with a blue noren curtain and red lanterns. A white vending machine and a bicycle are on the left side of the facade, while potted plants and a wooden menu board are on the right. Utility poles flank the building. The street is slick with rain, reflecting the warm lights."
   }
 }
