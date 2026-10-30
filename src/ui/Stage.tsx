@@ -49,7 +49,7 @@ function envParams(dt: number): View3DParams {
   const st = S(), v = live.view3d, e = live.engine, g = live.env!, cam = live.envCam;
   if (st.space.turn && !orbitDrag.on) cam.goal.yaw += dt * 8;
   cam.step(dt);
-  cam.update(g.radius);
+  cam.update(g.radius, g.depthScale);
   const weights = new Float32Array(8);
   g.angles.forEach((a, k) => {
     let d = Math.abs(((cam.yaw - a) % 360 + 540) % 360 - 180);
@@ -63,7 +63,7 @@ function envParams(dt: number): View3DParams {
   for (let k = 0; k < nSpec; k++) {
     const { L, s } = order[k];
     const p = worldOf(v, L.x, L.y, g.radius);
-    SPEC.pos.set([p[0], p[1], p[2], 0.28 * g.radius], k * 4);
+    SPEC.pos.set([p[0], p[1], p[2], 0.28 * g.depthScale], k * 4);
     const c = [T[L.id * 4], T[L.id * 4 + 1], T[L.id * 4 + 2]], m = Math.sqrt(s / maxFlux) * 1.6;
     SPEC.col.set([L.color[0] * c[0] * m, L.color[1] * c[1] * m, L.color[2] * c[2] * m], k * 3);
   }
@@ -72,7 +72,7 @@ function envParams(dt: number): View3DParams {
     const { L, s } = order[k];
     const p = worldOf(v, L.x, L.y, g.radius);
     const px = Math.min(110, Math.max(12, Math.sqrt(L.area) * 2.6 + 16)) * (v.w / 1360);
-    const size = (px * (p[2] + g.radius)) / v.focal; // world size from its size in the picture
+    const size = (px * (p[2] + g.radius)) / v.focal; // world size from its size in the picture (view 0 depth)
     const c = [T[L.id * 4], T[L.id * 4 + 1], T[L.id * 4 + 2]], m = 0.35 + 0.65 * Math.sqrt(s / maxFlux);
     SPRITES.set([p[0], p[1], p[2], size, L.color[0] * c[0] * m, L.color[1] * c[1] * m, L.color[2] * c[2] * m], k * 7);
   }
@@ -517,7 +517,8 @@ export function Stage() {
       const dx = ev.clientX - orbitDrag.x, dy = ev.clientY - orbitDrag.y;
       if (Math.hypot(dx, dy) > 3) orbitDrag.moved = true;
       const cam = live.envCam;
-      cam.goal.yaw = orbitDrag.yaw - dx * 0.3;
+      // walking round: drag the scene round; panorama: drag the view (turn the other way)
+      cam.goal.yaw = orbitDrag.yaw + (live.env?.mode === 'panorama' ? 0.25 : -0.3) * dx;
       cam.goal.pitch = clamp(orbitDrag.pitch + dy * 0.15, -18, 28);
       return;
     }

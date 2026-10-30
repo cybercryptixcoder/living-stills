@@ -95,6 +95,12 @@ Legend: ✅ done and tested live · 🟡 done, needs more work/testing · ⏳ no
       feature/button from Parallax ("Parallax" and "3D space"), same branch. Implemented; first live run on
       the Tokyo izakaya was in progress at handoff time — check `scratch/space-tokyo.log` /
       `test-results/space-*.png` in the `ls-splat` worktree, judge the quality honestly, iterate.
+    - 🟡 **Two variants of the 3D space** (user, 03:54): (1) *walk round it*: camera circles the centre facing
+      inwards; (2) *look around from here*: camera stays put and turns facing outwards (a panorama). Only the
+      prompts and the geometry differ (`mode: 'around' | 'panorama'` in `planOrbit`, `orbitViewPrompt`,
+      `makeOrbit`, `buildEnv`, `alignViews`, `EnvCamera.update`). Both implemented; panorama not yet tested live.
+    - 🟡 Photometric alignment of the drawn views (`alignViews`: small scale/angle search against the nearest
+      placed view; result kept in `doc.orbit.align`). Implemented, not yet judged visually.
     - ⏳ Research-driven quality upgrades (see §8).
 13. ✅ Commit/push often; Pages publishes `main` at `/` and `splat` at `/splat/` (one workflow on both
     branches).

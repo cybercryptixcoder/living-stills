@@ -12,7 +12,9 @@ export interface EnvGeometry {
   data: Float32Array;
   count: number;
   stride: number;
-  radius: number;
+  radius: number; // 0 for a panorama
+  mode: 'around' | 'panorama';
+  depthScale: number; // the scene's middle depth (the size of the space)
   /** each view's camera-to-world rotation angle (degrees, after alignment) */
   angles: number[];
 }
@@ -34,7 +36,7 @@ const mul3 = (M: number[], v: number[]) => [
  * Lifts every view and turns it into place. Each view's depth is relative, so its scale is set so that
  * the centre of its picture (the point the camera circles) is at the same distance in every view.
  */
-export function buildEnv(views: EnvView[], w: number, h: number, strength: number, stride: number): EnvGeometry {
+export function buildEnv(views: EnvView[], w: number, h: number, strength: number, stride: number, align?: { scale: number; yaw: number }[], mode: 'around' | 'panorama' = 'around'): EnvGeometry {
   const pts: number[] = [];
   const v0 = new View3D();
   v0.cam.strength = strength;
@@ -46,12 +48,14 @@ export function buildEnv(views: EnvView[], w: number, h: number, strength: numbe
     ds.sort((a, b) => a - b);
     return ds[ds.length >> 1];
   };
-  const R = centre(v0);
+  const R0 = centre(v0);
+  // walking round: every view is a camera at distance R from the centre; panorama: all at the centre
+  const R = mode === 'around' ? R0 : 0;
   views.forEach((view, k) => {
     const v = k === 0 ? v0 : new View3D();
     if (k) { v.cam.strength = strength; v.setScene(view.depth, w, h); }
-    const scale = R / centre(v);
-    const M = orbitRotation(view.angle);
+    const scale = (mode === 'around' ? R0 / centre(v) : 1) * (align?.[k]?.scale ?? 1);
+    const M = orbitRotation(view.angle + (align?.[k]?.yaw ?? 0));
     const span = Math.max(6, stride * 3);
     const toWorld = (p: number[]) => { const q = mul3(M, [p[0] * scale, p[1] * scale, p[2] * scale - R]); return q; };
     for (let y = stride / 2; y < h; y += stride)
@@ -77,7 +81,7 @@ export function buildEnv(views: EnvView[], w: number, h: number, strength: numbe
       }
   });
   const data = new Float32Array(pts);
-  return { data, count: data.length / ENV_FLOATS, stride, radius: R, angles: views.map((v) => v.angle) };
+  return { data, count: data.length / ENV_FLOATS, stride, radius: R, mode, depthScale: R0, angles: views.map((v, k) => v.angle + (align?.[k]?.yaw ?? 0)) };
 }
 
 /** The camera moving around the space: yaw any way round, pitch a little, distance in and out. */
@@ -96,15 +100,15 @@ export class EnvCamera {
     this.dist += (this.goal.dist - this.dist) * k;
   }
 
-  /** world -> camera matrix (column-major) for a radius R */
-  update(R: number) {
+  /** world -> camera matrix (column-major). R > 0: circle the centre at distance R·dist; R = 0: a
+   *  panorama, the camera turns on the spot and dist moves it forward a little (size = the space). */
+  update(R: number, size = 1) {
     const M = orbitRotation(this.yaw);
     const p = (this.pitch * Math.PI) / 180, cp = Math.cos(p), sp = Math.sin(p);
     // pitch: rotate about the camera's right axis; up (negative y) looks down at the centre
     const Rx = [1, 0, 0, 0, cp, -sp, 0, sp, cp]; // columns
     const C = [0, 1, 2].flatMap((col) => mul3(M, [Rx[col * 3], Rx[col * 3 + 1], Rx[col * 3 + 2]]));
-    const D = R * this.dist;
-    const pos = mul3(C, [0, 0, -D]);
+    const pos = R > 0 ? mul3(C, [0, 0, -R * this.dist]) : mul3(C, [0, 0, (1 - this.dist) * 0.5 * size]);
     this.eye = [pos[0], pos[1], pos[2]];
     // world -> camera = C^T (x - pos)
     const t = [-(C[0] * pos[0] + C[1] * pos[1] + C[2] * pos[2]), -(C[3] * pos[0] + C[4] * pos[1] + C[5] * pos[2]), -(C[6] * pos[0] + C[7] * pos[1] + C[8] * pos[2])];
@@ -122,6 +126,63 @@ export class EnvCamera {
 
 /** Where a picture pixel of view 0 sits in the space (for lights and the overlay). */
 export function worldOf(v0: View3D, x: number, y: number, R: number): number[] {
+  // R is 0 for a panorama: the first camera sits at the centre
   const p = v0.lift(x, y, v0.depthAt(x, y));
   return [p[0], p[1], p[2] - R];
+}
+
+/**
+ * Photometric alignment: the drawn views are only roughly where the prompt says. For each view, try
+ * small changes of scale and of its angle on the circle, and keep the one where its points, seen from
+ * the neighbouring (already placed) view, match that view's colours and depth best.
+ */
+export function alignViews(views: (EnvView & { rgba: Uint8ClampedArray })[], w: number, h: number, strength: number, mode: 'around' | 'panorama' = 'around'): { scale: number; yaw: number }[] {
+  const out = views.map(() => ({ scale: 1, yaw: 0 }));
+  const vs = views.map((v) => { const x = new View3D(); x.cam.strength = strength; x.setScene(v.depth, w, h); return x; });
+  const centre = (v: View3D) => v.lift(w / 2, h / 2, v.depthAt(w / 2, h / 2))[2];
+  const R0 = centre(vs[0]);
+  const R = mode === 'around' ? R0 : 0;
+  const base = vs.map((v) => (mode === 'around' ? R0 / centre(v) : 1));
+  // a fixed sample of pixels per view
+  const sample: [number, number][] = [];
+  for (let k = 0; k < 2500; k++) sample.push([((k * 0.618034) % 1) * w, ((k * 0.381966 + 0.5 * (k % 7) / 7) % 1) * h]);
+  const placed = [0];
+  const order = views.map((_, k) => k).slice(1).sort((a, b) => Math.min(views[a].angle, 360 - views[a].angle) - Math.min(views[b].angle, 360 - views[b].angle));
+  for (const k of order) {
+    // compare with the placed view whose angle is nearest
+    const j = placed.reduce((best, q) => (angGap(views[q].angle, views[k].angle) < angGap(views[best].angle, views[k].angle) ? q : best), placed[0]);
+    let bestScore = Infinity;
+    for (const ms of [0.8, 0.9, 1, 1.1, 1.25])
+      for (const dy of [-12, -6, 0, 6, 12]) {
+        const Mk = orbitRotation(views[k].angle + dy), Mj = orbitRotation(views[j].angle + out[j].yaw);
+        const sk = base[k] * ms, sj = base[j] * out[j].scale;
+        let err = 0, n = 0;
+        for (const [x, y] of sample) {
+          const p = vs[k].lift(x, y, vs[k].depthAt(x, y));
+          const wp = mul3(Mk, [p[0] * sk, p[1] * sk, p[2] * sk - R]);
+          // into view j's camera: q = Mj^T wp + (0,0,R), then undo its scale
+          const q = [Mj[0] * wp[0] + Mj[1] * wp[1] + Mj[2] * wp[2], Mj[3] * wp[0] + Mj[4] * wp[1] + Mj[5] * wp[2], Mj[6] * wp[0] + Mj[7] * wp[1] + Mj[8] * wp[2] + R];
+          if (q[2] <= 0.1) continue;
+          const z = q[2] / sj;
+          const u = ((q[0] / sj) / z) * vs[j].focal + w / 2, v = ((q[1] / sj) / z) * vs[j].focal + h / 2;
+          if (u < 1 || v < 1 || u >= w - 1 || v >= h - 1) continue;
+          const zj = vs[j].lift(u, v, vs[j].depthAt(u, v))[2];
+          if (Math.abs(zj - z) > 0.15 * zj) continue; // hidden from view j, or not the same surface
+          const a = (Math.round(y) * w + Math.round(x)) * 4, b = (Math.round(v) * w + Math.round(u)) * 4;
+          const A = views[k].rgba, B = views[j].rgba;
+          err += Math.abs(A[a] - B[b]) + Math.abs(A[a + 1] - B[b + 1]) + Math.abs(A[a + 2] - B[b + 2]);
+          n++;
+        }
+        // few matches is suspicious: prefer placements that share a visible surface
+        const score = n > 30 ? err / n + 4000 / n : Infinity;
+        if (score < bestScore) { bestScore = score; out[k] = { scale: ms, yaw: dy }; }
+      }
+    placed.push(k);
+  }
+  return out;
+}
+
+function angGap(a: number, b: number) {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
 }

@@ -75,7 +75,7 @@ export interface SceneDoc {
   /** Vision labels for the director (optional). */
   labels?: SceneLabels;
   /** The 3D space: views of the same place from around it (image keys orbit<angle>On / Off / Depth). */
-  orbit?: { angles: number[]; layout?: string; align?: { angle: number; scale: number; yaw: number }[] };
+  orbit?: { angles: number[]; mode?: 'around' | 'panorama'; layout?: string; align?: { angle: number; scale: number; yaw: number }[] };
   /** Set while a two-stage scene waits for its lights to be placed (only the picture exists). */
   draft?: { kind: 'dark' | 'ambient'; aspect: string };
   style?: string;

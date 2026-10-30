@@ -64,7 +64,7 @@ void main() {
   float r = uStride * uSize * uZoom * (p.z / max(q.z, 0.05)) * (aPoint.w > 0.5 ? max(2.0, 2.2 / uStride) : 1.0);
   // visibility discs must close every gap between neighbours (diagonals too), or what is
   // behind shows through; the blending kernel reaches a little further still
-  gl_PointSize = clamp(r * (uPass == 0 ? 1.5 : 2.6), 1.0, 96.0);
+  gl_PointSize = clamp(r * (uPass == 0 ? 1.5 : 2.2), 1.0, 96.0);
   vLayer = aPoint.w;
   if (uPass == 0) { vColor = vec3(0.0); vLight = vec3(0.0); return; }
   vec2 uv = (aSrc + 0.5) / uImg;
@@ -111,7 +111,7 @@ void main() {
     return;
   }
   if (r2 > 1.0) discard;
-  float w = exp(-r2 * 5.0) * (vLayer > 0.5 ? 0.35 : 1.0) * vW;
+  float w = exp(-r2 * 4.0) * (vLayer > 0.5 ? 0.35 : 1.0) * vW;
   oColor = vec4(vColor * w, w);
   oLight = vec4(vLight * w, w);
 }`;
@@ -220,7 +220,7 @@ void main() {
   float zn = clamp((q.z - 0.05) / 400.0, 0.0, 1.0);
   gl_Position = q.z <= 0.05 ? vec4(2.0, 2.0, 2.0, 1.0) : vec4(s.x / uImg.x * 2.0 - 1.0, s.y / uImg.y * 2.0 - 1.0, zn * 2.0 - 1.0, 1.0);
   float r = aFoot * uSize * uFocal * uZoom / max(q.z, 0.05);
-  gl_PointSize = clamp(r * (uPass == 0 ? 1.5 : 2.6), 1.0, 96.0);
+  gl_PointSize = clamp(r * (uPass == 0 ? 1.5 : 2.2), 1.0, 96.0);
   vLayer = 0.0;
   vW = vw;
   if (uPass == 0) { vColor = vec3(0.0); vLight = vec3(0.0); return; }

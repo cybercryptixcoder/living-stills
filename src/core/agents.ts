@@ -223,7 +223,7 @@ export interface OrbitPlan { angle: number; prompt: string }
  * the same height and distance, always looking at the centre; for each angle the model describes,
  * precisely, what that camera would see, so the image model can draw it consistently.
  */
-export async function planOrbit(img: Blob, angles: number[], c: AgentCreds): Promise<{ layout: string; views: OrbitPlan[] }> {
+export async function planOrbit(img: Blob, angles: number[], c: AgentCreds, mode: 'around' | 'panorama' = 'around'): Promise<{ layout: string; views: OrbitPlan[] }> {
   const bmp = await createImageBitmap(img);
   const s = Math.min(1, 1024 / bmp.width);
   const cv = document.createElement('canvas');
@@ -236,8 +236,11 @@ export async function planOrbit(img: Blob, angles: number[], c: AgentCreds): Pro
       role: 'system',
       content:
         'You plan new camera views of a place shown in one picture, so an image model can draw the same place from other sides. ' +
-        'Picture the scene as a real 3D space. The centre point is what is at the middle of the picture. The camera circles that centre point at the same height and the same distance, always aimed at it, like walking around it. ' +
-        'Angles are clockwise seen from above: 90 means the camera has walked a quarter circle to its right, so things that were on the right of the picture are now in front, and the original front is on the left; 180 is the opposite side, looking back towards where the first camera stood; 270 is a quarter circle to the left. ' +
+        (mode === 'around'
+          ? 'Picture the scene as a real 3D space. The centre point is what is at the middle of the picture. The camera circles that centre point at the same height and the same distance, always aimed at it, like walking around it. ' +
+            'Angles are clockwise seen from above: 90 means the camera has walked a quarter circle to its right, so things that were on the right of the picture are now in front, and the original front is on the left; 180 is the opposite side, looking back towards where the first camera stood; 270 is a quarter circle to the left. '
+          : 'Picture the scene as a real 3D space around the camera. The camera stays exactly where it is, at the same height, and only turns on the spot, like taking a panorama. ' +
+            'Angles are clockwise seen from above: 90 means the camera has turned a quarter turn to its right, so what was at the right edge of the picture is now at the left edge and the view continues past it; 180 looks straight behind the camera; 270 is a quarter turn to the left. Neighbouring views overlap at their edges. ') +
         'For each angle, write one paragraph that describes exactly what that camera sees: which objects are in front, on the left, on the right and in the background, which of their sides face the camera, the same materials, colours, lights (on, as in the picture), weather, time of day, lens and style. Keep every object the same; only invent what the first picture could not show, and keep it consistent with it.',
     },
     {

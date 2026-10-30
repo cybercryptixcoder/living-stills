@@ -207,7 +207,7 @@ export const useStore = create<Store>((set, get) => ({
   playing: null,
   music: { source: null, sensitivity: 1 },
   director: { open: false, busy: false, draft: '', thinking: '', turns: [] },
-  three: { available: false, on: false, busy: null, motion: 'follow', strength: 1, amount: 1, spec: 0.25, glow3d: 0.5, detail: 'fine' },
+  three: { available: false, on: false, busy: null, motion: 'follow', strength: 1, amount: 1, spec: 0.25, glow3d: 0.35, detail: 'fine' },
   also3d: true,
   space: { available: false, on: false, busy: null, turn: false },
   set: (p) => set(p),

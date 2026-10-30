@@ -443,31 +443,27 @@ function SpaceMenu() {
   const up = (patch: Partial<typeof space>) => set({ space: { ...useStore.getState().space, ...patch } });
   if (!scene) return null;
   if (!space.available) {
+    if (space.busy) return <button className="pill pill--space is-busy" disabled><Icon name="orbit" /><span className="pill__label">{space.busy}</span></button>;
+    const make = (mode: 'around' | 'panorama') => { set({ menu: null }); void makeSpace(mode); };
     return (
-      <button
-        className={`pill pill--space${space.busy ? ' is-busy' : ''}`}
-        disabled={!!space.busy}
-        data-testid="make-space"
-        title="Draws the place from three more sides (6 images, about 5.4¢), then measures their depth in your browser"
-        onClick={() => {
-          if (space.busy) return;
-          if (confirm('Make a 3D space? The place is drawn from three more sides, each lit and unlit (6 images, about 5.4¢); then their depth is measured in your browser (free, a few minutes). Your scene is kept as it is.')) void makeSpace();
-        }}
-      >
-        <Icon name="orbit" /><span className="pill__label">{space.busy ?? '3D space'}</span>
-      </button>
+      <MenuButton id="space" icon="orbit" label="3D space" testid="menu-space">
+        <p className="menu__title">3D space <span>draw the place from more sides, then put it together (6 images, about 5.4¢)</span></p>
+        <Item icon="orbit" name="Walk round it" help="The camera circles the middle of the picture, facing in, and sees it from the right, the back and the left. Best for a building, an object, a shop front." onClick={() => make('around')} testid="space-around" />
+        <Item icon="sunUp" name="Look around from here" help="The camera stays where it is and turns, facing out: a panorama of everything around. Best for a room, a street, a landscape." onClick={() => make('panorama')} testid="space-panorama" />
+        <p className="look__help">The other sides are imagined by the image model from your picture; Parallax stays the faithful view.</p>
+      </MenuButton>
     );
   }
   const go = (yaw: number) => { live.envCam.goal = { ...live.envCam.goal, yaw }; tickSound(); };
   return (
     <MenuButton id="space" icon="orbit" label={<><small>3D space</small>{space.on ? 'On' : 'Off'}</>} current={space.on} testid="menu-space">
-      <p className="menu__title">3D space <span>the place drawn from around it, put together: walk round it</span></p>
+      <p className="menu__title">3D space <span>{live.env?.mode === 'panorama' ? 'everything around the camera, put together: look around' : 'the place drawn from around it, put together: walk round it'}</span></p>
       <div className="look">
         <div className="look__row">
           <span className="slider__label">3D space</span>
           <Toggle on={space.on} onChange={(on) => { up({ on }); if (on) set({ three: { ...useStore.getState().three, on: false } }); tickSound(); }} label={space.on ? 'On' : 'Off'} />
         </div>
-        <p className="look__help">Drag the empty parts of the picture to walk round; scroll to move in and out. Click a light to adjust it, as usual.</p>
+        <p className="look__help">{live.env?.mode === 'panorama' ? 'Drag the empty parts of the picture to look around; scroll to step forward.' : 'Drag the empty parts of the picture to walk round; scroll to move in and out.'} Click a light to adjust it, as usual.</p>
         <div className="look__row">
           <span className="slider__label">Look from</span>
           <div className="segmented">

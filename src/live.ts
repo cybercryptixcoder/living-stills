@@ -18,7 +18,7 @@ import { computeZones, zonesFromGroups, zonesKey, type Zone } from './play/zones
 import type { Renderer } from './render/Renderer';
 import { depthFromPng, depthToPng, estimateDepth, refineDepth, type DepthMap } from './splat/depth';
 import { buildSplats, View3D } from './splat/view';
-import { buildEnv, EnvCamera, type EnvGeometry } from './splat/env';
+import { alignViews, buildEnv, EnvCamera, type EnvGeometry } from './splat/env';
 import { DEFAULT_VIEW, useStore, type SceneState } from './state';
 
 export const live = {
@@ -659,7 +659,16 @@ async function setupSpace(b: Bundle) {
   const off = await Promise.all(angles.map((a) => decodeAt(b.images[`orbit${a}Off`], w, h)));
   if (live.bundle !== b) return;
   const stride = r!.software ? 6 : S().three.detail === 'fast' ? 3 : 2;
-  const g = buildEnv([0, ...angles].map((angle, k) => ({ angle, depth: depths[k] })), w, h, S().three.strength, stride);
+  const views = [0, ...angles].map((angle, k) => ({ angle, depth: depths[k] }));
+  // where each drawn view really sits on the circle: found once, kept with the scene
+  let align = b.doc.orbit?.align?.map((a) => ({ scale: a.scale, yaw: a.yaw }));
+  if (!align || align.length !== views.length) {
+    const rgba0 = await decodeAt(b.images.on, w, h);
+    align = alignViews(views.map((v, k) => ({ ...v, rgba: k === 0 ? rgba0 : on[k - 1] })), w, h, S().three.strength, b.doc.orbit?.mode ?? 'around');
+    b.doc = { ...b.doc, orbit: { ...b.doc.orbit!, align: align.map((a, k) => ({ angle: views[k].angle, ...a })) } };
+    if (live.bundle?.source === 'local') await saveLocal(b);
+  }
+  const g = buildEnv(views, w, h, S().three.strength, stride, align, b.doc.orbit?.mode ?? 'around');
   live.env = g;
   r!.setEnv(g, { on, off });
   live.envCam.yaw = live.envCam.goal.yaw = 0;
@@ -674,7 +683,7 @@ async function setupSpace(b: Bundle) {
  * (and each with its lights off), then their depth is measured in the browser and everything is placed
  * on one circle around the scene's centre.
  */
-export async function makeSpace() {
+export async function makeSpace(mode: 'around' | 'panorama' = 'around') {
   const b0 = live.bundle;
   if (!b0) return;
   const st = S();
@@ -686,11 +695,11 @@ export async function makeSpace() {
     let plan = { layout: '', views: ORBIT.map((angle) => ({ angle, prompt: '' })) };
     if (st.luminalKey && relayUrl(st.relay)) {
       set({ busy: 'Imagining the other sides' });
-      plan = await planOrbit(b.images.on, ORBIT, { key: st.luminalKey, relay: st.relay });
+      plan = await planOrbit(b.images.on, ORBIT, { key: st.luminalKey, relay: st.relay }, mode);
     }
     set({ busy: null });
-    const { report, signal } = startJob('Drawing it from around');
-    const nb = await makeOrbit(b, { key: st.key, model: st.model, angles: ORBIT, layout: plan.layout, plans: plan.views, signal }, report);
+    const { report, signal } = startJob(mode === 'around' ? 'Drawing it from around' : 'Drawing what is all around');
+    const nb = await makeOrbit(b, { key: st.key, model: st.model, angles: ORBIT, layout: plan.layout, plans: plan.views, mode, signal }, report);
     if (b.source === 'example') nb.doc = { ...nb.doc, id: `${b.doc.id}-space-${Date.now().toString(36)}`, title: `${b.doc.title}, in 3D`, demo: { ...b.doc.demo, order: undefined } };
     S().set({ job: null });
     const rgbaFor = async (blob: Blob) => decodeAt(blob, nb.doc.width, nb.doc.height);
@@ -711,4 +720,4 @@ export async function makeSpace() {
     S().toast(`The 3D space could not be made: ${(err as Error).message}`, 'error');
   }
 }
-Object.assign(live, { makeSpaceForTests: () => makeSpace() });
+Object.assign(live, { makeSpaceForTests: (mode?: 'around' | 'panorama') => makeSpace(mode) });

@@ -105,7 +105,17 @@ export function lightFromTextPrompt(lighting: string): string {
 }
 
 /** A view of the same place from another side (the camera has circled the centre by `angle` degrees). */
-export function orbitViewPrompt(angle: number, layout: string, view: string): string {
+export function orbitViewPrompt(angle: number, layout: string, view: string, mode: 'around' | 'panorama' = 'around'): string {
+  if (mode === 'panorama') {
+    const turn = angle === 180 ? 'turned right round, looking straight behind where it first looked'
+      : angle < 180 ? `turned ${angle} degrees to the right on the spot` : `turned ${360 - angle} degrees to the left on the spot`;
+    return (
+      `Show the same place as the reference picture, photographed from exactly the same spot and height with the same lens, but the camera has ${turn}, as in a panorama. ` +
+      (layout ? `The place: ${layout} ` : '') +
+      (view ? `In this direction: ${view} ` : '') +
+      'Same materials, colours, lights switched on, weather, time of day and style; the view continues seamlessly from the reference picture at its edges. A natural, coherent part of the same surroundings.'
+    );
+  }
   const where = angle === 180 ? 'from the opposite side, looking back towards where the first camera stood'
     : angle < 180 ? `after walking ${angle} degrees around it to the right (clockwise seen from above)` : `after walking ${360 - angle} degrees around it to the left (counter-clockwise seen from above)`;
   return (

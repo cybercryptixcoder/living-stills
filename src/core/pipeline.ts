@@ -410,6 +410,7 @@ export interface OrbitParams {
   angles: number[];
   layout: string;
   plans: { angle: number; prompt: string }[];
+  mode?: 'around' | 'panorama';
   signal?: AbortSignal;
 }
 
@@ -433,7 +434,7 @@ export async function makeOrbit(b: Bundle, p: OrbitParams, report: Report): Prom
     const near = done.get(neighbours[0])!;
     const plan = p.plans.find((x) => x.angle === a)?.prompt ?? '';
     const refs = neighbours[0] === 0 ? [b.images.on] : [b.images.on, near];
-    const on = (await t.run(`on${a}`, () => generateImage({ ...opts, prompt: orbitViewPrompt(a, p.layout, plan), refs }), p.model, `orbit${a}On`)).blob;
+    const on = (await t.run(`on${a}`, () => generateImage({ ...opts, prompt: orbitViewPrompt(a, p.layout, plan, p.mode), refs }), p.model, `orbit${a}On`)).blob;
     done.set(a, on);
     images[`orbit${a}On`] = on;
     offJobs.push(t.run(`off${a}`, () => generateImage({ ...opts, prompt: lightsOffPrompt(b.doc.lighting), refs: [on] }), p.model, `orbit${a}Off`).then((r) => { images[`orbit${a}Off`] = r.blob; }));
@@ -442,7 +443,7 @@ export async function makeOrbit(b: Bundle, p: OrbitParams, report: Report): Prom
   const keys = p.angles.flatMap((a) => [`orbit${a}On`, `orbit${a}Off`]);
   const doc: SceneDoc = {
     ...b.doc,
-    orbit: { angles: p.angles, layout: p.layout },
+    orbit: { angles: p.angles, mode: p.mode ?? 'around', layout: p.layout },
     images: { ...b.doc.images, ...Object.fromEntries(keys.map((k) => [k, k])) },
     steps: [...b.doc.steps, ...t.log],
     cost: b.doc.cost + t.cost,

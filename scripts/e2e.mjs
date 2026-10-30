@@ -11,6 +11,8 @@
 //   lightup   two stages, part 2: --markers "x,y,note,#color;x,y,note" (fractions of the picture) on the
 //             draft in this --profile; the planner reads the picture, then 1 (or 2) images
 //   refine    repaint the brightest --count lights of --scene (default Rain Alley)
+//   depth     (splat) measure depth for --scene (--remeasure to redo), check parallax and lights in 3D, --bake
+//   space     (splat) make the 3D space for --scene (6 images), walk round it, --bake
 // --mock    answer image calls with local fixtures instead of OpenRouter (plumbing only, free)
 // --bake    export the resulting scene into public/scenes/<name> as an example
 // --profile keep browser storage between runs in this folder
