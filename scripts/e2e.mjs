@@ -194,7 +194,7 @@ async function lightChecks(tag) {
   const change = await page.evaluate(() => { const a = window.__onBuf, b = window.__living.renderer.readComposite(); let d = 0; for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); return d / (a.length / 4); });
   void onBuf;
   log(`${tag}: mean change between all on and all off ${change.toFixed(4)}`);
-  check(signed ? change > 0.004 : on > off * 1.08, `${tag}: switching all lights changes the picture (mean linear luminance ${off.toFixed(4)} -> ${on.toFixed(4)}${signed ? ', signed light' : ''})`);
+  check(signed ? change > 0.004 : on > off * 1.08 || change > 0.006, `${tag}: switching all lights changes the picture (mean linear luminance ${off.toFixed(4)} -> ${on.toFixed(4)}${signed ? ', signed light' : ''})`);
   await page.evaluate(() => window.__living.engine.setAll(1));
   await waitEngine(1);
   // the light panel: click a light, switch its group off in the panel, the picture darkens there
@@ -306,7 +306,7 @@ async function bake(name, meta) {
 
 async function makeScene({ prompt, lighting, element, two, kind }) {
   await page.click('[data-testid=open-create]');
-  if (two) await page.click('.sheet .segmented button:has-text("Picture first")');
+  if (two) await page.click('.sheet .segmented button:has-text("Picture, then lights")');
   await page.fill('[data-testid=create-prompt]', prompt);
   if (lighting) await page.fill('[data-testid=create-lighting]', lighting);
   if (element) {

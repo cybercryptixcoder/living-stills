@@ -105,13 +105,15 @@ export function markerFocus(markers: Marker[], w: number) {
 function groupByMarkers(lights: LightInfo[], markers: Marker[], w: number): GroupInfo[] {
   const pad = 0.04 * w;
   for (const L of lights) {
+    // among the markers whose object box holds this light, the one placed closest to it; boxes from the
+    // vision model can overlap (three windows side by side), the clicked points do not
     let pick: Marker | null = null, best = Infinity;
     for (const m of markers) {
       if (!m.box) continue;
       const [x0, y0, x1, y1] = m.box;
       if (L.x >= x0 - pad && L.x <= x1 + pad && L.y >= y0 - pad && L.y <= y1 + pad) {
-        const area = (x1 - x0) * (y1 - y0);
-        if (area < best) { best = area; pick = m; }
+        const d = Math.hypot(L.x - m.x, L.y - m.y);
+        if (d < best) { best = d; pick = m; }
       }
     }
     if (!pick) {

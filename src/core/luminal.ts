@@ -49,6 +49,7 @@ let sameOrigin = import.meta.env.DEV ? DEV_RELAY : '';
  */
 export async function detectRelay(): Promise<string> {
   if (import.meta.env.DEV) return sameOrigin;
+  if (location.hostname.endsWith('github.io')) return ''; // static hosting: no relay can live next to the page
   try {
     const url = `${import.meta.env.BASE_URL}luminal`;
     const r = await fetch(`${url}/models`, { method: 'OPTIONS' });
