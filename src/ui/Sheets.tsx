@@ -521,6 +521,8 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
         <dt>+2 for something moving</dt>
         <dd>The scene without it, lit and unlit, so it can be cut out and loop.</dd>
       </dl>
+      <h3 className="subhead">3D preview</h3>
+      <p className="field__hint">The same scenes as Gaussian splats you can look around, lights and all, are being built on their own branch: <a href="./splat/" target="_blank" rel="noreferrer">open the 3D preview</a>.</p>
       <h3 className="subhead">Keys</h3>
       <ul className="keys">
         {EFFECTS.map((m) => <li key={m.id}><kbd>{m.key}</kbd><span>{m.name}</span></li>)}
