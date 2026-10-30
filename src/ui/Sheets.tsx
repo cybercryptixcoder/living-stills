@@ -146,6 +146,7 @@ export function CreateSheet({ onClose }: { onClose: () => void }) {
   const [changes, setChanges] = useState('');
   const [then, setThen] = useState<'picture' | 'describe' | 'place'>('place');
   const fileRef = useRef<HTMLInputElement>(null);
+  const camRef = useRef<HTMLInputElement>(null);
   useEffect(() => () => { if (photoUrl) URL.revokeObjectURL(photoUrl); }, [photoUrl]);
   const takePhoto = (f: File | undefined | null) => {
     if (!f || !f.type.startsWith('image/')) return;
@@ -199,6 +200,12 @@ export function CreateSheet({ onClose }: { onClose: () => void }) {
         <div className="field">
           <span className="field__label">Your picture</span>
           <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => takePhoto(e.target.files?.[0])} data-testid="photo-input" />
+          {/* on phones this opens the camera straight away */}
+          <input ref={camRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => takePhoto(e.target.files?.[0])} />
+          <div className="photo-actions">
+            <button className="chip" onClick={() => camRef.current?.click()}><Icon name="camera" /><span>Take a photo</span></button>
+            <button className="chip" onClick={() => fileRef.current?.click()}><Icon name="upload" /><span>Choose a picture</span></button>
+          </div>
           <button
             className={`dropzone${photoUrl ? ' has-photo' : ''}`}
             onClick={() => fileRef.current?.click()}
