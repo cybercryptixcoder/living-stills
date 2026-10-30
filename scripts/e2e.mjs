@@ -548,6 +548,46 @@ if (FLOW === 'play') {
       await bake(args.bake, { doc: { title: args.title || meta.title }, demo: { ...(meta.demo ?? {}), order: Number(args.order || meta.demo?.order || 10), start3d: true } });
     }
   }
+  if (FLOW === 'space') {
+    // the 3D space: views from around the scene (6 images), their depth, then walk round it
+    await waitScene();
+    await page.evaluate(async (t) => {
+      const s = window.__living.store.getState();
+      const e = s.examples.find((x) => x.id === t) ?? s.locals.find((x) => x.title === t && !x.doc.draft);
+      await window.__living.openEntryForTests(e);
+    }, args.scene);
+    await waitScene();
+    const before = await spent();
+    const t0 = Date.now();
+    await page.evaluate(() => { window.__sp = false; window.__living.makeSpaceForTests().then(() => { window.__sp = true; }); });
+    let last = '';
+    while (!(await state(() => window.__sp))) {
+      const b = await state(() => { const s = window.__living.store.getState(); return s.job ? s.job.steps.map((x) => `${x.label}:${x.status}`).join(' | ') + (s.job.error ? ` ERROR ${s.job.error}` : '') : s.space.busy; });
+      if (b !== last) { log('  ', b); last = b; }
+      await page.waitForTimeout(3000);
+    }
+    log(`space made in ${((Date.now() - t0) / 1000).toFixed(0)} s, spent ${((await spent()) - before).toFixed(4)}`);
+    const sp = await state(() => ({ ...window.__living.store.getState().space, n: window.__living.env?.count }));
+    check(sp.available && sp.on, `space: built (${sp.n} splats)`);
+    await page.evaluate(() => { const s = window.__living.store.getState(); s.set({ space: { ...s.space, on: true } }); window.__living.engine.setAll(1); });
+    const shot = async (yaw, name) => {
+      await page.evaluate((y) => { const c = window.__living.envCam; c.goal.yaw = y; c.yaw = y; }, yaw);
+      await waitEngine(1.5);
+      await page.screenshot({ path: `${OUT}/space-${name}.png`, timeout: 300000 });
+      return page.evaluate(() => { const c = window.__living.renderer.readComposite('view'); let s = 0; for (let i = 0; i < c.length; i += 4) s += c[i] + c[i + 1] + c[i + 2]; return s / c.length; });
+    };
+    const a0 = await shot(0, 'front');
+    await shot(40, 'right40');
+    const a90 = await shot(90, 'right');
+    await shot(180, 'back');
+    await shot(270, 'left');
+    check(Math.abs(a0 - a90) > 0.001, `space: walking round changes the view (${a0.toFixed(4)} vs ${a90.toFixed(4)})`);
+    await shot(0, 'front-again');
+    if (args.bake) {
+      const meta = await state(() => window.__living.store.getState().scene.doc);
+      await bake(args.bake, { doc: { title: args.title || meta.title.replace(/, in 3D$/, '') }, demo: { ...(meta.demo ?? {}), order: Number(args.order || 1), start3d: true } });
+    }
+  }
   if (FLOW === 'refine') {
     await waitScene();
     const target = args.scene || 'Rain Alley';
