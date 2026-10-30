@@ -103,3 +103,15 @@ export function lightFromTextPrompt(lighting: string): string {
     'Nothing else lights up and no new objects are added. Keep everything else exactly the same: same composition and framing, same objects, same medium and style. Do not move or redraw anything.'
   );
 }
+
+/** A view of the same place from another side (the camera has circled the centre by `angle` degrees). */
+export function orbitViewPrompt(angle: number, layout: string, view: string): string {
+  const where = angle === 180 ? 'from the opposite side, looking back towards where the first camera stood'
+    : angle < 180 ? `after walking ${angle} degrees around it to the right (clockwise seen from above)` : `after walking ${360 - angle} degrees around it to the left (counter-clockwise seen from above)`;
+  return (
+    `Show exactly the same place as the reference picture, photographed from a new camera position: the camera circles the centre of the scene at the same height and distance, always aimed at the centre, and is now ${where}. ` +
+    (layout ? `The place: ${layout} ` : '') +
+    (view ? `From here: ${view} ` : '') +
+    'Same objects, same materials and colours, the same lights switched on, the same weather, time of day, lens and style. A natural, coherent view of the same 3D space; nothing new that would contradict the reference.'
+  );
+}

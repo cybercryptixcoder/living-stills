@@ -4,6 +4,7 @@ import { audio } from '../play/audio';
 import { makeRoute } from '../play/engine';
 import { Renderer, type View3DParams } from '../render/Renderer';
 import { Engine } from '../play/engine';
+import { worldOf } from '../splat/env';
 import { useStore } from '../state';
 import { switchSound, tickSound } from './sound';
 
@@ -12,8 +13,79 @@ const S = () => useStore.getState();
 /** Screen position of the pointer over the print (0..1), for the 3D camera; and drag state. */
 const raw = { x: 0.5, y: 0.5, inside: false, drag: null as null | { x: number; y: number; yaw: number; pitch: number; moved: boolean } };
 const SPEC = { pos: new Float32Array(32), col: new Float32Array(24) };
+
+/** Phones: tilt the phone to look around (follow mode). iOS asks for permission on a tap. */
+let tilt: { base: [number, number] | null; on: boolean } = { base: null, on: false };
+export async function enableTilt() {
+  if (tilt.on || typeof window === 'undefined' || !('DeviceOrientationEvent' in window)) return;
+  const D = DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
+  try { if (D.requestPermission && (await D.requestPermission()) !== 'granted') return; } catch { return; }
+  tilt = { base: null, on: true };
+  window.addEventListener('deviceorientation', (e) => {
+    if (e.beta == null || e.gamma == null) return;
+    if (!tilt.base) tilt.base = [e.beta, e.gamma];
+    const dx = Math.max(-1, Math.min(1, (e.gamma - tilt.base[1]) / 25));
+    const dy = Math.max(-1, Math.min(1, (e.beta - tilt.base[0]) / 25));
+    raw.x = 0.5 + 0.5 * dx; raw.y = 0.5 + 0.5 * dy; raw.inside = true;
+  });
+}
 const SPRITES = new Float32Array(64 * 7);
-const is3d = () => S().three.on && !!live.renderer?.hasSplats;
+const isSpace = () => S().space.on && !!live.renderer?.hasEnv && !!live.env;
+const is3d = () => isSpace() || (S().three.on && !!live.renderer?.hasSplats);
+/** dragging the 3D space round */
+const orbitDrag = { on: false, x: 0, y: 0, yaw: 0, pitch: 0, moved: false };
+/** where each light lands on the picture in the 3D space this frame (image px), for picking */
+let envLightPx: Float32Array = new Float32Array(0);
+
+/** A picture pixel (of the original view) projected into the 3D space's camera, in image px. */
+function envProject(x: number, y: number): [number, number] {
+  const v = live.view3d, g = live.env!;
+  const p = live.envCam.project(worldOf(v, x, y, g.radius), v.focal, v.w, v.h, 1);
+  return [p[0], p[1]];
+}
+
+/** The 3D space: camera, how much each view counts from here, lights placed in the world. */
+function envParams(dt: number): View3DParams {
+  const st = S(), v = live.view3d, e = live.engine, g = live.env!, cam = live.envCam;
+  if (st.space.turn && !orbitDrag.on) cam.goal.yaw += dt * 8;
+  cam.step(dt);
+  cam.update(g.radius);
+  const weights = new Float32Array(8);
+  g.angles.forEach((a, k) => {
+    let d = Math.abs(((cam.yaw - a) % 360 + 540) % 360 - 180);
+    d = (d * Math.PI) / 180;
+    weights[k] = Math.pow(Math.max(0, Math.cos(d)), 2) * (k === 0 ? 1.5 : 1);
+  });
+  const T = e.lightTable();
+  const order = e.lights.map((L, i) => ({ L, i, s: L.flux * Math.max(0, e.level[i]) })).filter((o) => o.s > 0.001).sort((a, b) => b.s - a.s);
+  const maxFlux = order[0]?.s || 1;
+  const nSpec = Math.min(8, order.length);
+  for (let k = 0; k < nSpec; k++) {
+    const { L, s } = order[k];
+    const p = worldOf(v, L.x, L.y, g.radius);
+    SPEC.pos.set([p[0], p[1], p[2], 0.28 * g.radius], k * 4);
+    const c = [T[L.id * 4], T[L.id * 4 + 1], T[L.id * 4 + 2]], m = Math.sqrt(s / maxFlux) * 1.6;
+    SPEC.col.set([L.color[0] * c[0] * m, L.color[1] * c[1] * m, L.color[2] * c[2] * m], k * 3);
+  }
+  const nSprites = Math.min(64, order.length);
+  for (let k = 0; k < nSprites; k++) {
+    const { L, s } = order[k];
+    const p = worldOf(v, L.x, L.y, g.radius);
+    const px = Math.min(110, Math.max(12, Math.sqrt(L.area) * 2.6 + 16)) * (v.w / 1360);
+    const size = (px * (p[2] + g.radius)) / v.focal; // world size from its size in the picture
+    const c = [T[L.id * 4], T[L.id * 4 + 1], T[L.id * 4 + 2]], m = 0.35 + 0.65 * Math.sqrt(s / maxFlux);
+    SPRITES.set([p[0], p[1], p[2], size, L.color[0] * c[0] * m, L.color[1] * c[1] * m, L.color[2] * c[2] * m], k * 7);
+  }
+  if (envLightPx.length !== e.lights.length * 2) envLightPx = new Float32Array(e.lights.length * 2);
+  e.lights.forEach((L, i) => { const q = envProject(L.x, L.y); envLightPx[i * 2] = q[0]; envLightPx[i * 2 + 1] = q[1]; });
+  return {
+    view: cam.view, focal: v.focal, zoom: 1, zRange: v.zRange, eye: cam.eye, size: 1,
+    spec: st.three.spec, glow3d: st.three.glow3d,
+    lights: { pos: SPEC.pos, col: SPEC.col, count: nSpec },
+    sprites: { data: SPRITES, count: nSprites },
+    env: { weights, lit: e.litness },
+  };
+}
 
 /** Camera goal for this frame, the brightest lights for highlights and glow sprites. */
 function view3dParams(dt: number, t: number): View3DParams {
@@ -245,7 +317,7 @@ export function Stage() {
       r.setTable(e.lightTable());
       const el = e.elementOutput();
       const v = st.view;
-      const view3d = is3d() ? view3dParams(dt, now / 1000) : undefined;
+      const view3d = isSpace() ? envParams(dt) : is3d() ? view3dParams(dt, now / 1000) : undefined;
       r.draw({
         layerA, layerB, mix, ambient: v.ambient, daylight: v.daylight, exposure: v.exposure, glow: v.glow, haze: v.haze, grain: v.grain,
         spriteDx, spriteT: el.t, spriteGain: el.gain, radius: 0,
@@ -271,8 +343,10 @@ export function Stage() {
       // overlay
       const sx = rect.w / a.width;
       const flat = !view3d;
+      const space = !!view3d?.env;
       const toScreen = (x: number, y: number): [number, number] => {
         if (flat) return [rect.x + x * sx, rect.y + y * sx];
+        if (space) { const [px, py] = envProject(x, y); return [rect.x + px * sx, rect.y + py * sx]; }
         const [px, py] = live.view3d.project(x, y);
         return [rect.x + px * sx, rect.y + py * sx];
       };
@@ -422,13 +496,31 @@ export function Stage() {
     const inside = x >= 0 && y >= 0 && x < a.width && y < a.height;
     raw.x = x / a.width; raw.y = y / a.height; raw.inside = inside;
     // in 3D, find the point of the picture that is under the cursor in the moved view
-    if (is3d() && inside) [x, y] = live.view3d.unproject(x, y);
+    if (isSpace()) { /* picking in the 3D space works on projected light positions (pickAt) */ }
+    else if (is3d() && inside) [x, y] = live.view3d.unproject(x, y);
     return { x, y, inside, scale: local.w / a.width };
   };
 
-  const pickAt = (x: number, y: number, scale: number) => live.engine.pick(x, y, 14 / scale);
+  const pickAt = (x: number, y: number, scale: number) => {
+    if (!isSpace()) return live.engine.pick(x, y, 14 / scale);
+    // the 3D space: the light whose projected place is nearest the pointer
+    let best = -1, bd = 16 / scale;
+    for (let i = 0; i * 2 < envLightPx.length; i++) {
+      const d = Math.hypot(envLightPx[i * 2] - x, envLightPx[i * 2 + 1] - y);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  };
 
   const onMove = (ev: React.PointerEvent) => {
+    if (orbitDrag.on) {
+      const dx = ev.clientX - orbitDrag.x, dy = ev.clientY - orbitDrag.y;
+      if (Math.hypot(dx, dy) > 3) orbitDrag.moved = true;
+      const cam = live.envCam;
+      cam.goal.yaw = orbitDrag.yaw - dx * 0.3;
+      cam.goal.pitch = clamp(orbitDrag.pitch + dy * 0.15, -18, 28);
+      return;
+    }
     const q = toImage(ev.clientX, ev.clientY);
     if (!q) return;
     if (press.current && Math.hypot(ev.clientX - press.current.x, ev.clientY - press.current.y) > 10) { clearTimeout(press.current.timer); press.current = null; }
@@ -466,6 +558,16 @@ export function Stage() {
   };
 
   const onDown = (ev: React.PointerEvent) => {
+    if (isSpace() && ev.button !== 2) {
+      const q0 = toImage(ev.clientX, ev.clientY);
+      const hit = q0 && q0.inside ? pickAt(q0.x, q0.y, q0.scale) : -1;
+      if (hit < 0) {
+        // empty space: drag to walk round
+        Object.assign(orbitDrag, { on: true, x: ev.clientX, y: ev.clientY, yaw: live.envCam.goal.yaw, pitch: live.envCam.goal.pitch, moved: false });
+        (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
+        return;
+      }
+    }
     if (ev.button === 2) return;
     const q = toImage(ev.clientX, ev.clientY);
     if (!q || !q.inside) return;
@@ -545,6 +647,11 @@ export function Stage() {
   };
 
   const onUp = (ev?: React.PointerEvent) => {
+    if (orbitDrag.on) {
+      orbitDrag.on = false;
+      if (!orbitDrag.moved && S().selection) S().set({ selection: null });
+      return;
+    }
     const e = live.engine;
     e.pointer.down = false;
     if (press.current) { clearTimeout(press.current.timer); press.current = null; }
@@ -591,6 +698,11 @@ export function Stage() {
         onPointerDown={onDown}
         onPointerUp={onUp}
         onPointerCancel={onUp}
+        onWheel={(ev) => {
+          if (!isSpace()) return;
+          const cam = live.envCam;
+          cam.goal.dist = clamp(cam.goal.dist * (1 + ev.deltaY * 0.001), 0.35, 1.8);
+        }}
         onPointerLeave={() => { live.engine.pointer.inside = false; setTip(null); if (S().hovered != null) S().set({ hovered: null }); }}
         onContextMenu={onContext}
         data-testid="stage"

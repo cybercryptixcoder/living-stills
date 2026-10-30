@@ -2,13 +2,13 @@
 // item says what it is for. Only the controls of what is active show on the row itself.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { listen, live, make3D, rebuildSplats, playPreset, removeLocal, runRepaintOff, saveBlob, slug, stopShow, downloadScene } from '../live';
+import { listen, live, make3D, makeSpace, rebuildSplats, playPreset, removeLocal, runRepaintOff, saveBlob, slug, stopShow, downloadScene } from '../live';
 import type { ModeId, MusicMap } from '../play/engine';
 import { BUILT_IN, deletePreset, loadSaved, type Preset } from '../play/presets';
 import { DEFAULT_VIEW, useStore, type Menu } from '../state';
 import { Segmented, Slider, Toggle } from './controls';
 import { Icon, type IconName } from './icons';
-import { stageRect, TOUCH } from './Stage';
+import { enableTilt, stageRect, TOUCH } from './Stage';
 import { tickSound } from './sound';
 
 export const EFFECTS: { id: ModeId; icon: IconName; name: string; help: string; key: string }[] = [
@@ -391,22 +391,22 @@ function ThreeMenu() {
   if (!three.available) {
     return (
       <button className={`pill pill--three${three.busy ? ' is-busy' : ''}`} onClick={() => { if (!three.busy) void make3D(); }} disabled={!!three.busy} data-testid="make-3d" title="Measure depth in your browser (free) and turn the picture into 3D splats">
-        <Icon name="cube" /><span className="pill__label">{three.busy ?? 'Make it 3D'}</span>
+        <Icon name="cube" /><span className="pill__label">{three.busy ?? 'Parallax'}</span>
       </button>
     );
   }
   return (
-    <MenuButton id="three" icon="cube" label={<><small>3D</small>{three.busy ? 'Adding detail' : three.on ? 'On' : 'Off'}</>} current={three.on} testid="menu-three">
-      <p className="menu__title">3D <span>the picture as Gaussian splats you can look around</span></p>
+    <MenuButton id="three" icon="cube" label={<><small>Parallax</small>{three.busy ? 'Adding detail' : three.on ? 'On' : 'Off'}</>} current={three.on} testid="menu-three">
+      <p className="menu__title">Parallax <span>the picture as Gaussian splats: look around it a little</span></p>
       <div className="look">
         <div className="look__row">
-          <span className="slider__label">3D view</span>
-          <Toggle on={three.on} onChange={(on) => { up({ on }); live.view3d.goal = { ...live.view3d.goal, yaw: 0, pitch: 0, dolly: 0 }; tickSound(); }} label={three.on ? 'On' : 'Off'} />
+          <span className="slider__label">Parallax</span>
+          <Toggle on={three.on} onChange={(on) => { up({ on }); if (on) set({ space: { ...useStore.getState().space, on: false } }); if (on && TOUCH) void enableTilt(); live.view3d.goal = { ...live.view3d.goal, yaw: 0, pitch: 0, dolly: 0 }; tickSound(); }} label={three.on ? 'On' : 'Off'} />
         </div>
         <div className="look__row">
           <span className="slider__label">Camera</span>
-          <Segmented label="How the camera moves" value={three.motion} onChange={(motion) => { up({ motion }); live.view3d.goal = { ...live.view3d.goal, yaw: 0, pitch: 0, dolly: 0 }; tickSound(); }} options={[
-            { value: 'follow', label: 'Follow cursor', hint: 'Look around as you move the pointer over the picture' },
+          <Segmented label="How the camera moves" value={three.motion} onChange={(motion) => { up({ motion }); if (motion === 'follow' && TOUCH) void enableTilt(); live.view3d.goal = { ...live.view3d.goal, yaw: 0, pitch: 0, dolly: 0 }; tickSound(); }} options={[
+            { value: 'follow', label: TOUCH ? 'Tilt' : 'Follow cursor', hint: TOUCH ? 'Tilt your phone to look around' : 'Look around as you move the pointer over the picture' },
             { value: 'drag', label: 'Drag', hint: 'Drag the empty parts of the picture to turn' },
             { value: 'sway', label: 'Sway', hint: 'Drifts slowly on its own' },
           ]} />
@@ -429,6 +429,56 @@ function ThreeMenu() {
         <p className="look__help">Glints from the brightest lights that slide over surfaces as you move.</p>
         <Slider label="Glow in space" value={three.glow3d} min={0} max={2} def={0.5} format={(v) => `${Math.round(v * 100)}%`} onChange={(glow3d) => up({ glow3d })} />
         <p className="look__help">A glow at each light's place in space; nearer things hide it.</p>
+      </div>
+    </MenuButton>
+  );
+}
+
+// ---------------------------------------------------------------- the 3D space
+
+function SpaceMenu() {
+  const space = useStore((s) => s.space);
+  const scene = useStore((s) => s.scene);
+  const set = useStore((s) => s.set);
+  const up = (patch: Partial<typeof space>) => set({ space: { ...useStore.getState().space, ...patch } });
+  if (!scene) return null;
+  if (!space.available) {
+    return (
+      <button
+        className={`pill pill--space${space.busy ? ' is-busy' : ''}`}
+        disabled={!!space.busy}
+        data-testid="make-space"
+        title="Draws the place from three more sides (6 images, about 5.4¢), then measures their depth in your browser"
+        onClick={() => {
+          if (space.busy) return;
+          if (confirm('Make a 3D space? The place is drawn from three more sides, each lit and unlit (6 images, about 5.4¢); then their depth is measured in your browser (free, a few minutes). Your scene is kept as it is.')) void makeSpace();
+        }}
+      >
+        <Icon name="orbit" /><span className="pill__label">{space.busy ?? '3D space'}</span>
+      </button>
+    );
+  }
+  const go = (yaw: number) => { live.envCam.goal = { ...live.envCam.goal, yaw }; tickSound(); };
+  return (
+    <MenuButton id="space" icon="orbit" label={<><small>3D space</small>{space.on ? 'On' : 'Off'}</>} current={space.on} testid="menu-space">
+      <p className="menu__title">3D space <span>the place drawn from around it, put together: walk round it</span></p>
+      <div className="look">
+        <div className="look__row">
+          <span className="slider__label">3D space</span>
+          <Toggle on={space.on} onChange={(on) => { up({ on }); if (on) set({ three: { ...useStore.getState().three, on: false } }); tickSound(); }} label={space.on ? 'On' : 'Off'} />
+        </div>
+        <p className="look__help">Drag the empty parts of the picture to walk round; scroll to move in and out. Click a light to adjust it, as usual.</p>
+        <div className="look__row">
+          <span className="slider__label">Look from</span>
+          <div className="segmented">
+            {[['Front', 0], ['Right', 90], ['Back', 180], ['Left', 270]].map(([n, a]) => <button key={n} onClick={() => go(a as number)}>{n}</button>)}
+          </div>
+        </div>
+        <div className="look__row">
+          <span className="slider__label">Turn slowly</span>
+          <Toggle on={space.turn} onChange={(turn) => up({ turn })} label={space.turn ? 'On' : 'Off'} />
+        </div>
+        <p className="look__help">The other sides are drawn by the image model from the first picture, so they are imagined: closest to true near the front.</p>
       </div>
     </MenuButton>
   );
@@ -457,6 +507,7 @@ export function Dock() {
           <Icon name="wand" /><span className="pill__label">Director</span>
         </button>
         <ThreeMenu />
+        <SpaceMenu />
       </div>
       <div className="dock__params"><EffectParams /></div>
       <div className="dock__right">

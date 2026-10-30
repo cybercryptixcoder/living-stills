@@ -90,6 +90,7 @@ export const Icons = {
   bulb: () => <I><path d="M7 13.2c0-2-2.2-3-2.2-5.7a5.2 5.2 0 0 1 10.4 0c0 2.7-2.2 3.7-2.2 5.7z" /><path d="M7.6 15.6h4.8M8.4 17.6h3.2" /></I>,
   pin: () => <I><path d="M10 17.5s5-4.6 5-8.6a5 5 0 0 0-10 0c0 4 5 8.6 5 8.6z" /><circle cx="10" cy="8.9" r="1.8" /></I>,
   lasso: () => <I><rect x="3.5" y="4.5" width="13" height="10" rx="1.5" strokeDasharray="2 2.2" /></I>,
+  orbit: () => <I><ellipse cx="10" cy="10" rx="7.5" ry="3.2" /><circle cx="10" cy="10" r="2.6" /><circle cx="17.2" cy="9" r="1" fill="currentColor" stroke="none" /></I>,
   cube: () => <I><path d="M10 2.8 16.5 6.4v7.2L10 17.2 3.5 13.6V6.4z" /><path d="M3.5 6.4 10 10l6.5-3.6M10 10v7.2" /></I>,
   more: () => <I><circle cx="4.5" cy="10" r="1.1" fill="currentColor" stroke="none" /><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none" /><circle cx="15.5" cy="10" r="1.1" fill="currentColor" stroke="none" /></I>,
 };

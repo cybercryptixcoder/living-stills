@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "cabin",
+  "title": "Cabin porch, snowy dusk",
+  "prompt": "A cosy wooden cabin porch at dusk in snowy pine woods, a sled and stacked firewood in the foreground, the porch with two rocking chairs, pine trees receding into blue dusk, photograph",
+  "lighting": "string lights along the porch roof, a lantern on the steps, warm windows of the cabin, a lamp by the door",
+  "createdAt": "2026-10-30T07:09:24.635Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg",
+    "depth": "depth.png"
+  },
+  "steps": [
+    {
+      "label": "Making the picture, lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 5338,
+      "image": "on"
+    },
+    {
+      "label": "Switching the lights off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9231,
+      "image": "off"
+    }
+  ],
+  "cost": 0.018,
+  "labels": {
+    "summary": "A cozy wooden cabin with a snow-covered porch and string lights glows warmly against a snowy pine forest at dusk.",
+    "zones": {
+      "1": "string lights under roof",
+      "2": "string lights along eave",
+      "3": "string lights on porch",
+      "4": "string lights across ceiling",
+      "5": "string lights near roof",
+      "6": "lit wall lantern",
+      "7": "string lights on wall",
+      "8": "lit cabin windows",
+      "9": "lantern on snowy steps"
+    },
+    "key": "32.3.11|42.1.13|20.6.14|25.5.19|37.4.11|42.6.12|46.4.8|33.8.27|26.19.15"
+  },
+  "demo": {
+    "order": 2,
+    "startMode": "hand",
+    "start3d": true
+  }
+}

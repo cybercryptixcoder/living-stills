@@ -202,18 +202,37 @@ export function buildSplats(view: View3D, w: number, h: number, stride = 2): Spl
       if (hi - lo > 0.04) d = hi - d < d - lo ? hi : lo;
       push(x, y, d, 0, x, y);
     }
-  // behind depth edges: what a moving camera uncovers is guessed as the far side continuing
-  const s2 = stride * 2, R = stride * 4;
-  for (let y = s2 / 2; y < h; y += s2)
-    for (let x = s2 / 2; x < w; x += s2) {
-      let lo = Infinity, hi = -Infinity, fx = x, fy = y;
-      for (let dy = -R; dy <= R; dy += stride)
-        for (let dx = -R; dx <= R; dx += stride) {
-          const d = at(x + dx, y + dy);
-          if (d < lo) { lo = d; fx = x + dx; fy = y + dy; }
-          if (d > hi) hi = d;
-        }
-      if (hi - lo > 0.06) push(x, y, lo, 1, Math.min(w - 1, Math.max(0, fx)), Math.min(h - 1, Math.max(0, fy)));
+  // Behind depth edges: what a moving camera uncovers is guessed as the far side continuing.
+  // Separable min/max filters over a wide window (with where the minimum was) find, for each spot
+  // near an edge, the farthest surface around it and its colour.
+  const D = view.depth!;
+  const fw = D.w, fh = D.h, N = fw * fh;
+  const R = Math.max(4, Math.round((16 / w) * fw)); // ~16 picture px
+  const lo1 = new Float32Array(N), arg1 = new Int32Array(N), hi1 = new Float32Array(N);
+  for (let y = 0; y < fh; y++)
+    for (let x = 0; x < fw; x++) {
+      let lo = Infinity, hi = -Infinity, at0 = 0;
+      for (let k = -R; k <= R; k += 2) {
+        const xx = Math.min(fw - 1, Math.max(0, x + k)), v = D.data[y * fw + xx];
+        if (v < lo) { lo = v; at0 = y * fw + xx; }
+        if (v > hi) hi = v;
+      }
+      lo1[y * fw + x] = lo; arg1[y * fw + x] = at0; hi1[y * fw + x] = hi;
+    }
+  const step = Math.max(2, Math.round(stride * 2));
+  for (let y = step / 2; y < h; y += step)
+    for (let x = step / 2; x < w; x += step) {
+      const fx = Math.min(fw - 1, Math.round((x / w) * fw)), fy = Math.min(fh - 1, Math.round((y / h) * fh));
+      let lo = Infinity, hi = -Infinity, at0 = 0;
+      for (let k = -R; k <= R; k += 2) {
+        const yy = Math.min(fh - 1, Math.max(0, fy + k)), i = yy * fw + fx;
+        if (lo1[i] < lo) { lo = lo1[i]; at0 = arg1[i]; }
+        if (hi1[i] > hi) hi = hi1[i];
+      }
+      if (hi - lo > 0.05 && at(x, y) - lo > 0.04) {
+        const sx = ((at0 % fw) + 0.5) * (w / fw), sy = (Math.floor(at0 / fw) + 0.5) * (h / fh);
+        push(x, y, lo, 1, Math.min(w - 1, sx), Math.min(h - 1, sy));
+      }
     }
   const data = new Float32Array(pts);
   return { data, count: data.length / FLOATS_PER_POINT, stride };

@@ -6,7 +6,7 @@ import { contextCrop } from './analysis';
 import { generateImage, pool, priceOf } from './openrouter';
 import {
   DARK_VERSION_PROMPT, SINGLE_LIGHT_WITH_REFERENCE_PROMPT, basePrompt, lightFromTextPrompt, lightUpPrompt, lightsOffPrompt, recreatePrompt,
-  removeElementPrompt, scenePrompt,
+  orbitViewPrompt, removeElementPrompt, scenePrompt,
 } from './prompts';
 import type { LightInfo, Marker, Rect, Refinement, SceneDoc, StepLog } from './types';
 
@@ -399,4 +399,58 @@ export async function fromPhoto(p: PhotoParams, report: Report): Promise<Bundle>
     steps: log, cost: log.reduce((a, x) => a + x.cost, 0),
   };
   return { doc, images };
+}
+
+
+// ---------------------------------------------------------------- views from around the scene (the 3D space)
+
+export interface OrbitParams {
+  key: string;
+  model: string;
+  angles: number[];
+  layout: string;
+  plans: { angle: number; prompt: string }[];
+  signal?: AbortSignal;
+}
+
+/**
+ * Views of the same place from around it. Each view is drawn from the original picture and the view
+ * next to it (two references keep neighbours consistent), with the planner's description of what that
+ * camera sees; then the same view with its lights off, so the space can be relit.
+ */
+export async function makeOrbit(b: Bundle, p: OrbitParams, report: Report): Promise<Bundle> {
+  const steps = p.angles.flatMap((a) => [{ id: `on${a}`, label: `Drawing the view from ${a}°` }, { id: `off${a}`, label: `Its lights off (${a}°)` }]);
+  const t = new Tracker(steps, report);
+  const aspect = aspectString(b.doc.width, b.doc.height, { aspects: ASPECTS });
+  const opts = { key: p.key, model: p.model, resolution: b.doc.resolution, aspectRatio: aspect, signal: p.signal };
+  const images: Record<string, Blob> = { ...b.images };
+  // walk out from the original both ways, so every view has a drawn neighbour to stay consistent with
+  const order = [...p.angles].sort((x, y) => Math.min(x, 360 - x) - Math.min(y, 360 - y));
+  const done = new Map<number, Blob>([[0, b.images.on]]);
+  const offJobs: Promise<void>[] = [];
+  for (const a of order) {
+    const neighbours = [...done.keys()].sort((x, y) => angDist(x, a) - angDist(y, a));
+    const near = done.get(neighbours[0])!;
+    const plan = p.plans.find((x) => x.angle === a)?.prompt ?? '';
+    const refs = neighbours[0] === 0 ? [b.images.on] : [b.images.on, near];
+    const on = (await t.run(`on${a}`, () => generateImage({ ...opts, prompt: orbitViewPrompt(a, p.layout, plan), refs }), p.model, `orbit${a}On`)).blob;
+    done.set(a, on);
+    images[`orbit${a}On`] = on;
+    offJobs.push(t.run(`off${a}`, () => generateImage({ ...opts, prompt: lightsOffPrompt(b.doc.lighting), refs: [on] }), p.model, `orbit${a}Off`).then((r) => { images[`orbit${a}Off`] = r.blob; }));
+  }
+  await Promise.all(offJobs);
+  const keys = p.angles.flatMap((a) => [`orbit${a}On`, `orbit${a}Off`]);
+  const doc: SceneDoc = {
+    ...b.doc,
+    orbit: { angles: p.angles, layout: p.layout },
+    images: { ...b.doc.images, ...Object.fromEntries(keys.map((k) => [k, k])) },
+    steps: [...b.doc.steps, ...t.log],
+    cost: b.doc.cost + t.cost,
+  };
+  return { doc, images };
+}
+
+function angDist(a: number, b: number) {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
 }

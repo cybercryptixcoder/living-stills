@@ -4,10 +4,10 @@ import { analyzer } from './core/analyzer';
 import { deleteLocal, exportZip, importZip, listExamples, listLocal, loadBundle, saveLocal, type SceneEntry } from './core/library';
 import { modelById } from './core/openrouter';
 import {
-  aspectString, createBase, createScene, fromPhoto, lightUp, refineLights, repaintOff,
+  aspectString, createBase, createScene, fromPhoto, lightUp, makeOrbit, refineLights, repaintOff,
   type BaseParams, type Bundle, type CreateParams, type JobStep, type PhotoParams,
 } from './core/pipeline';
-import { direct, labelZones, planFromNotes, planMarkers, type DirectorScene, type MarkerPlan } from './core/agents';
+import { direct, labelZones, planFromNotes, planMarkers, planOrbit, type DirectorScene, type MarkerPlan } from './core/agents';
 import { relayUrl } from './core/luminal';
 import type { AnalysisResult, Marker } from './core/types';
 import { audio } from './play/audio';
@@ -18,6 +18,7 @@ import { computeZones, zonesFromGroups, zonesKey, type Zone } from './play/zones
 import type { Renderer } from './render/Renderer';
 import { depthFromPng, depthToPng, estimateDepth, refineDepth, type DepthMap } from './splat/depth';
 import { buildSplats, View3D } from './splat/view';
+import { buildEnv, EnvCamera, type EnvGeometry } from './splat/env';
 import { DEFAULT_VIEW, useStore, type SceneState } from './state';
 
 export const live = {
@@ -31,6 +32,9 @@ export const live = {
   draft: null as (Bundle & { source: 'local' }) | null,
   /** the 3D view: camera and depth */
   view3d: new View3D(),
+  /** the 3D space (views from around the scene) */
+  env: null as EnvGeometry | null,
+  envCam: new EnvCamera(),
 };
 
 (window as unknown as { __living: typeof live & { store: typeof useStore } }).__living = Object.assign(live, { store: useStore });
@@ -111,6 +115,7 @@ export async function openBundle(b: Bundle & { source: 'example' | 'local' }, ke
   });
   if (!keepUi && startMode === 'dusk') playPreset(BUILT_IN.find((p) => p.id === 'dusk')!);
   await setupDepth(b, !keepUi && !!b.doc.demo?.start3d);
+  await setupSpace(b);
   try { localStorage.setItem('living-stills:last', b.doc.id); } catch { /* ignore */ }
   if (!labels) void ensureLabels();
 }
@@ -184,6 +189,8 @@ async function finishJob(b: Bundle) {
     throw new Error(`The images are saved in Scenes, but opening the scene failed: ${(err as Error).message}`);
   }
   S().set({ job: null });
+  // "and make it 3D": measure depth right after, in the browser
+  if (S().also3d && !b.doc.draft) void make3D();
 }
 
 function failJob(err: unknown) {
@@ -620,3 +627,88 @@ export async function make3D() {
     S().toast(`Could not measure depth: ${(err as Error).message}`, 'error');
   }
 }
+
+// ---------------------------------------------------------------- the 3D space (views from around the scene)
+
+const ORBIT = [90, 180, 270];
+
+async function decodeAt(blob: Blob, w: number, h: number): Promise<Uint8ClampedArray> {
+  const bmp = await createImageBitmap(blob);
+  const c = new OffscreenCanvas(w, h);
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  return ctx.getImageData(0, 0, w, h).data;
+}
+
+/** Builds the 3D space if the scene has its views and their depth. */
+async function setupSpace(b: Bundle) {
+  const r = live.renderer;
+  const space = S().space;
+  const angles = b.doc.orbit?.angles ?? [];
+  const ok = !!r && !!b.images.depth && angles.length > 0 && angles.every((a) => b.images[`orbit${a}On`] && b.images[`orbit${a}Off`] && b.images[`orbit${a}Depth`]);
+  if (!ok) {
+    r?.setEnv(null);
+    live.env = null;
+    S().set({ space: { ...space, available: false, on: false } });
+    return;
+  }
+  const { width: w, height: h } = b.doc;
+  const depths = await Promise.all([b.images.depth, ...angles.map((a) => b.images[`orbit${a}Depth`])].map((x) => depthFromPng(x)));
+  const on = await Promise.all(angles.map((a) => decodeAt(b.images[`orbit${a}On`], w, h)));
+  const off = await Promise.all(angles.map((a) => decodeAt(b.images[`orbit${a}Off`], w, h)));
+  if (live.bundle !== b) return;
+  const stride = r!.software ? 6 : S().three.detail === 'fast' ? 3 : 2;
+  const g = buildEnv([0, ...angles].map((angle, k) => ({ angle, depth: depths[k] })), w, h, S().three.strength, stride);
+  live.env = g;
+  r!.setEnv(g, { on, off });
+  live.envCam.yaw = live.envCam.goal.yaw = 0;
+  live.envCam.pitch = live.envCam.goal.pitch = 0;
+  live.envCam.dist = live.envCam.goal.dist = 1;
+  S().set({ space: { ...S().space, available: true, on: S().space.on || !!b.doc.demo?.startSpace, busy: null } });
+  if (S().space.on) S().set({ three: { ...S().three, on: false } });
+}
+
+/**
+ * Makes the 3D space: DeepSeek describes the place from three more sides, the image model draws them
+ * (and each with its lights off), then their depth is measured in the browser and everything is placed
+ * on one circle around the scene's centre.
+ */
+export async function makeSpace() {
+  const b0 = live.bundle;
+  if (!b0) return;
+  const st = S();
+  const set = (patch: Partial<ReturnType<typeof S>['space']>) => S().set({ space: { ...S().space, ...patch } });
+  if (!st.key) { S().set({ sheet: 'settings' }); return; }
+  try {
+    if (!b0.images.depth) { set({ busy: 'Measuring depth first' }); await make3D(); }
+    const b = live.bundle!;
+    let plan = { layout: '', views: ORBIT.map((angle) => ({ angle, prompt: '' })) };
+    if (st.luminalKey && relayUrl(st.relay)) {
+      set({ busy: 'Imagining the other sides' });
+      plan = await planOrbit(b.images.on, ORBIT, { key: st.luminalKey, relay: st.relay });
+    }
+    set({ busy: null });
+    const { report, signal } = startJob('Drawing it from around');
+    const nb = await makeOrbit(b, { key: st.key, model: st.model, angles: ORBIT, layout: plan.layout, plans: plan.views, signal }, report);
+    if (b.source === 'example') nb.doc = { ...nb.doc, id: `${b.doc.id}-space-${Date.now().toString(36)}`, title: `${b.doc.title}, in 3D`, demo: { ...b.doc.demo, order: undefined } };
+    S().set({ job: null });
+    const rgbaFor = async (blob: Blob) => decodeAt(blob, nb.doc.width, nb.doc.height);
+    for (const a of ORBIT) {
+      set({ busy: `Measuring depth from ${a}°` });
+      const src = nb.images[`orbit${a}On`];
+      const d = refineDepth(await estimateDepth(src, (p, t) => set({ busy: p < 1 ? `${t} · ${Math.round(p * 100)}%` : `Measuring depth from ${a}°` }), 'base'), await rgbaFor(src), nb.doc.width, nb.doc.height);
+      nb.images[`orbit${a}Depth`] = await depthToPng(d);
+      nb.doc.images[`orbit${a}Depth`] = `orbit${a}Depth`;
+    }
+    await saveLocal(nb);
+    await refreshLibrary();
+    await openBundle({ ...nb, source: 'local' }, true);
+    set({ busy: null, on: true });
+  } catch (err) {
+    set({ busy: null });
+    failJob(err);
+    S().toast(`The 3D space could not be made: ${(err as Error).message}`, 'error');
+  }
+}
+Object.assign(live, { makeSpaceForTests: () => makeSpace() });

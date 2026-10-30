@@ -213,3 +213,51 @@ export async function direct(scene: DirectorScene, request: string, history: { r
   }
   throw lastErr ?? new Error('The director did not return a show.');
 }
+
+// ---------------------------------------------------------------- views from around the scene
+
+export interface OrbitPlan { angle: number; prompt: string }
+
+/**
+ * Plans views of the same place from other sides. The camera circles the centre of the picture at
+ * the same height and distance, always looking at the centre; for each angle the model describes,
+ * precisely, what that camera would see, so the image model can draw it consistently.
+ */
+export async function planOrbit(img: Blob, angles: number[], c: AgentCreds): Promise<{ layout: string; views: OrbitPlan[] }> {
+  const bmp = await createImageBitmap(img);
+  const s = Math.min(1, 1024 / bmp.width);
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(bmp.width * s); cv.height = Math.round(bmp.height * s);
+  cv.getContext('2d')!.drawImage(bmp, 0, 0, cv.width, cv.height);
+  bmp.close();
+  const url = cv.toDataURL('image/jpeg', 0.88);
+  const messages: ChatMessage[] = [
+    {
+      role: 'system',
+      content:
+        'You plan new camera views of a place shown in one picture, so an image model can draw the same place from other sides. ' +
+        'Picture the scene as a real 3D space. The centre point is what is at the middle of the picture. The camera circles that centre point at the same height and the same distance, always aimed at it, like walking around it. ' +
+        'Angles are clockwise seen from above: 90 means the camera has walked a quarter circle to its right, so things that were on the right of the picture are now in front, and the original front is on the left; 180 is the opposite side, looking back towards where the first camera stood; 270 is a quarter circle to the left. ' +
+        'For each angle, write one paragraph that describes exactly what that camera sees: which objects are in front, on the left, on the right and in the background, which of their sides face the camera, the same materials, colours, lights (on, as in the picture), weather, time of day, lens and style. Keep every object the same; only invent what the first picture could not show, and keep it consistent with it.',
+    },
+    {
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url } },
+        {
+          type: 'text',
+          text:
+            `Angles: ${angles.join(', ')}.\n` +
+            'Reply with JSON only: {"layout": "a short description of the whole place as a 3D space: what is where, sizes, the ground, what surrounds it", "views": [{"angle": 90, "prompt": "..."}]}',
+        },
+      ],
+    },
+  ];
+  const r = await chat({ ...c, messages, effort: 'low', maxTokens: 3000, json: true, temperature: 0.4 });
+  const j = parseJson<{ layout?: string; views?: { angle?: number; prompt?: string }[] }>(r.content);
+  const views = angles.map((a) => {
+    const v = j.views?.find((x) => Number(x.angle) === a);
+    return { angle: a, prompt: (v?.prompt ?? '').slice(0, 1500) };
+  });
+  return { layout: (j.layout ?? '').slice(0, 1200), views };
+}

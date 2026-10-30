@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "id": "tokyo",
+  "title": "Tokyo izakaya, night",
+  "prompt": "A tiny Tokyo shop at night seen from across a narrow lane: a two-storey wooden izakaya with indigo noren curtains, red paper lanterns, frosted glass sliding doors, a glowing menu board, a vending machine on the left, a bicycle and potted plants in the foreground, power lines overhead, light rain on the street, cinematic photograph, 35mm",
+  "lighting": "the red paper lanterns, the warm light behind the frosted glass doors and noren, the menu board, the vending machine, a small neon sign above the door, two upstairs windows",
+  "createdAt": "2026-10-30T07:09:19.920Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg",
+    "depth": "depth.png"
+  },
+  "steps": [
+    {
+      "label": "Making the picture, lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 6897,
+      "image": "on"
+    },
+    {
+      "label": "Switching the lights off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10976,
+      "image": "off"
+    }
+  ],
+  "cost": 0.018,
+  "labels": {
+    "summary": "A rainy evening street scene featuring a traditional Japanese izakaya with warm glowing windows, lanterns, and a vending machine.",
+    "zones": {
+      "1": "upstairs window with curtains",
+      "2": "upstairs window with curtains",
+      "3": "upstairs window with curtains",
+      "4": "small wall-mounted light",
+      "5": "illuminated wooden window lattice",
+      "6": "blue neon sign",
+      "7": "blue curtain with white text",
+      "8": "red paper lantern",
+      "9": "illuminated menu board",
+      "10": "lit entrance doorway",
+      "11": "reflected light on wet pavement",
+      "12": "reflected light on wet pavement"
+    },
+    "key": "20.5.10|23.3.10|36.5.7|16.13.12|21.13.29|28.12.11|31.14.5|37.14.63|41.13.29|30.19.25|31.28.2|38.28.22"
+  },
+  "demo": {
+    "order": 1,
+    "startMode": "hand",
+    "start3d": true
+  }
+}

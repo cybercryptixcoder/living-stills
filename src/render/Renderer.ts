@@ -2,7 +2,8 @@
 // blur pyramid for glow and the backdrop, then a final pass to the screen.
 
 import type { LayerData, SpriteData } from '../core/types';
-import { NORMALIZE, SPLAT_FRAG, SPLAT_VERT, SPRITE_FRAG, SPRITE_VERT } from '../splat/shaders';
+import { ENV_SPRITE_VERT, ENV_VERT, NORMALIZE, SPLAT_FRAG, SPLAT_VERT, SPRITE_FRAG, SPRITE_VERT } from '../splat/shaders';
+import { ENV_FLOATS, type EnvGeometry } from '../splat/env';
 import { FLOATS_PER_POINT, type SplatGeometry } from '../splat/view';
 import { COMPOSITE, DOWN, FINAL, UP, VERT } from './shaders';
 
@@ -47,6 +48,8 @@ export interface View3DParams {
   glow3d: number; // glow sprite strength
   lights: { pos: Float32Array; col: Float32Array; count: number }; // up to 8: xyz reach, rgb
   sprites: { data: Float32Array; count: number }; // per sprite: x, y, d, size, r, g, b
+  /** the 3D space instead of the parallax view: world -> camera, per-view weights, how lit */
+  env?: { weights: Float32Array; lit: number };
 }
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -67,6 +70,11 @@ export class Renderer {
   private splatStride = 2;
   private spriteVao: WebGLVertexArrayObject;
   private spriteBuf: WebGLBuffer;
+  private envProg: Prog;
+  private envSpriteProg: Prog;
+  private envVao: WebGLVertexArrayObject;
+  private envBuf: WebGLBuffer;
+  private envCount = 0;
   private acc: Target | null = null;
   private view: Target | null = null;
   private depthRb: WebGLRenderbuffer | null = null;
@@ -113,6 +121,17 @@ export class Renderer {
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, S, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, S, 16);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, S, 28);
+    this.envProg = this.program(SPLAT_FRAG, ENV_VERT);
+    this.envSpriteProg = this.program(SPRITE_FRAG, ENV_SPRITE_VERT);
+    this.envBuf = gl.createBuffer()!;
+    this.envVao = gl.createVertexArray()!;
+    gl.bindVertexArray(this.envVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.envBuf);
+    const E = ENV_FLOATS * 4;
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, E, 0);
+    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, E, 16);
+    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 2, gl.FLOAT, false, E, 28);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 1, gl.FLOAT, false, E, 36);
     this.spriteBuf = gl.createBuffer()!;
     this.spriteVao = gl.createVertexArray()!;
     gl.bindVertexArray(this.spriteVao);
@@ -211,6 +230,26 @@ export class Renderer {
     return this.splatCount > 0;
   }
 
+  /** The 3D space: placed splats and the other views' lit and unlit pictures (RGBA, picture size). */
+  setEnv(g: EnvGeometry | null, views?: { on: Uint8ClampedArray[]; off: Uint8ClampedArray[] }) {
+    const gl = this.gl;
+    this.envCount = g?.count ?? 0;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.envBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, g?.data ?? new Float32Array(0), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    if (g && views && this.input) {
+      const { w, h } = this.input;
+      const u8 = (a: Uint8ClampedArray) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      const list = (xs: Uint8ClampedArray[]) => (xs.length ? xs.map(u8) : [new Uint8Array(w * h * 4)]);
+      this.array('envOn', gl.SRGB8_ALPHA8, gl.UNSIGNED_BYTE, gl.LINEAR, w, h, list(views.on));
+      this.array('envOff', gl.SRGB8_ALPHA8, gl.UNSIGNED_BYTE, gl.LINEAR, w, h, list(views.off));
+    }
+  }
+
+  get hasEnv() {
+    return this.envCount > 0;
+  }
+
   private makeView(w: number, h: number) {
     const gl = this.gl;
     [this.acc, this.view].forEach((t) => this.freeTarget(t));
@@ -233,13 +272,14 @@ export class Renderer {
     const { w, h } = this.input!;
     if (!this.acc || this.acc.w !== w || this.acc.h !== h) this.makeView(w, h);
     const acc = this.acc!, view = this.view!;
-    const sp = this.splatProg;
+    const env = !!v.env && this.envCount > 0;
+    const sp = env ? this.envProg : this.splatProg;
     const camera = (prog: Prog) => {
       gl.uniform2f(prog.u.uImg, w, h);
       gl.uniform1f(prog.u.uFocal, v.focal);
-      gl.uniform2f(prog.u.uZ, v.zRange[0], v.zRange[1]);
+      if (prog.u.uZ) gl.uniform2f(prog.u.uZ, v.zRange[0], v.zRange[1]);
       gl.uniformMatrix4fv(prog.u.uView, false, v.view);
-      gl.uniform1f(prog.u.uStride, this.splatStride);
+      if (prog.u.uStride) gl.uniform1f(prog.u.uStride, this.splatStride);
       gl.uniform1f(prog.u.uZoom, v.zoom);
     };
     gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fb);
@@ -259,14 +299,21 @@ export class Renderer {
       gl.uniform3fv(sp.u['uLCol[0]'], v.lights.col);
     }
     gl.uniform1f(sp.u.uSpec, v.spec);
-    gl.bindVertexArray(this.splatVao);
+    if (env) {
+      this.bindTex(sp, 'uOn', 2, this.tex.envOn, gl.TEXTURE_2D_ARRAY);
+      this.bindTex(sp, 'uOff', 3, this.tex.envOff, gl.TEXTURE_2D_ARRAY);
+      gl.uniform1f(sp.u.uLit, v.env!.lit);
+      gl.uniform1fv(sp.u['uVW[0]'], v.env!.weights);
+    }
+    const count = env ? this.envCount : this.splatCount;
+    gl.bindVertexArray(env ? this.envVao : this.splatVao);
     // 1. visibility
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.depthMask(true);
     gl.colorMask(false, false, false, false);
     gl.uniform1i(sp.u.uPass, 0);
-    gl.drawArrays(gl.POINTS, 0, this.splatCount);
+    gl.drawArrays(gl.POINTS, 0, count);
     // 2. accumulation within the depth tolerance
     gl.colorMask(true, true, true, true);
     gl.depthMask(false);
@@ -274,7 +321,7 @@ export class Renderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.uniform1i(sp.u.uPass, 1);
-    gl.drawArrays(gl.POINTS, 0, this.splatCount);
+    gl.drawArrays(gl.POINTS, 0, count);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     for (const t of acc.tex) { gl.bindTexture(gl.TEXTURE_2D, t); gl.generateMipmap(gl.TEXTURE_2D); }
@@ -288,7 +335,7 @@ export class Renderer {
     this.pass(view);
     // 4. glow sprites, hidden behind nearer surfaces
     if (v.sprites.count && v.glow3d > 0) {
-      const s = this.spriteProg;
+      const s = env ? this.envSpriteProg : this.spriteProg;
       gl.useProgram(s.p);
       camera(s);
       gl.uniform1f(s.u.uGlow3d, v.glow3d);
@@ -438,7 +485,7 @@ export class Renderer {
       }
     };
     let src: Target = this.scene;
-    if (p.view3d && this.splatCount) {
+    if (p.view3d && (p.view3d.env ? this.envCount : this.splatCount)) {
       // the backdrop pyramid of the flat picture fills holes in the 3D view
       down(this.scene.tex[0], w, h, this.backDown);
       src = this.drawSplats(p.view3d);
@@ -519,5 +566,7 @@ export class Renderer {
     [this.acc, this.view].forEach((t) => this.freeTarget(t));
     gl.deleteProgram(this.splatProg.p);
     gl.deleteProgram(this.spriteProg.p);
+    gl.deleteProgram(this.envProg.p);
+    gl.deleteProgram(this.envSpriteProg.p);
   }
 }

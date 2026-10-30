@@ -10,7 +10,7 @@ import type { Show } from './play/show';
 import type { Zone } from './play/zones';
 
 export type Sheet = null | 'scenes' | 'create' | 'settings' | 'help' | 'reflections' | 'refine' | 'studio';
-export type Menu = null | 'effects' | 'presets' | 'look' | 'capture' | 'scene' | 'three';
+export type Menu = null | 'effects' | 'presets' | 'look' | 'capture' | 'scene' | 'three' | 'space';
 
 export interface View {
   ambient: number;
@@ -72,6 +72,13 @@ export interface ThreeState {
   spec: number; // highlights from the lights
   glow3d: number; // glow at the lights' places in space
   detail: 'fine' | 'fast';
+}
+
+export interface SpaceState {
+  available: boolean; // views from around the scene exist
+  on: boolean;
+  busy: string | null;
+  turn: boolean; // turn slowly on its own
 }
 
 export interface DirectorState {
@@ -156,6 +163,9 @@ export interface Store extends Settings {
   music: { source: 'mic' | 'tab' | null; error?: string; sensitivity: number };
   director: DirectorState;
   three: ThreeState;
+  space: SpaceState;
+  /** make new scenes 3D as soon as they are made */
+  also3d: boolean;
   set: (p: Partial<Store>) => void;
   setSettings: (p: Partial<Settings>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
@@ -198,6 +208,8 @@ export const useStore = create<Store>((set, get) => ({
   music: { source: null, sensitivity: 1 },
   director: { open: false, busy: false, draft: '', thinking: '', turns: [] },
   three: { available: false, on: false, busy: null, motion: 'follow', strength: 1, amount: 1, spec: 0.25, glow3d: 0.5, detail: 'fine' },
+  also3d: true,
+  space: { available: false, on: false, busy: null, turn: false },
   set: (p) => set(p),
   setSettings: (p) => { saveSettings(p); set(p); },
   toast: (text, kind = 'info') => {

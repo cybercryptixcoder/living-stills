@@ -174,6 +174,7 @@ export function CreateSheet({ onClose }: { onClose: () => void }) {
     else if (flow === 'two') void runCreateBase({ model, resolution: res, aspect, description: prompt, lighting, kind: kindNow === 'ambient' ? 'ambient' : 'dark', title: title.trim() || undefined });
     else void runFromPhoto({ photo: photo!, recreate, changes, then, kind: kindNow, lighting, title: title.trim() || undefined });
   };
+  const also3d = useStore((s) => s.also3d);
   const goLabel = !key ? 'Add your OpenRouter key' : flow === 'one' ? 'Make it' : flow === 'two' ? 'Make the picture' : then === 'describe' ? 'Light it up' : recreate ? 'Recreate it' : 'Use it';
   return (
     <Sheet title="New scene" onClose={onClose} wide
@@ -260,6 +261,9 @@ export function CreateSheet({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
+      {!(flow === 'photo' && then === 'picture') && (
+        <Toggle on={also3d} onChange={(v) => set({ also3d: v })} label="Also make it 3D: Gaussian splats you can look around (free, in your browser)" />
+      )}
       <button className="linkbtn" onClick={() => setMore(!more)} aria-expanded={more}>{more ? 'Fewer options' : 'More options'}</button>
       {more && (
         <div className="moreopts">
@@ -521,8 +525,15 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
         <dt>+2 for something moving</dt>
         <dd>The scene without it, lit and unlit, so it can be cut out and loop.</dd>
       </dl>
-      <h3 className="subhead">3D preview</h3>
-      <p className="field__hint">The same scenes as Gaussian splats you can look around, lights and all, are being built on their own branch: <a href="./splat/" target="_blank" rel="noreferrer">open the 3D preview</a>.</p>
+      <h3 className="subhead">3D</h3>
+      <dl className="methods">
+        <dt>Make it 3D</dt>
+        <dd>Depth is measured in your browser (free): a quick look in seconds, then full detail a minute or two later. Every pixel becomes a Gaussian splat at its depth, so the picture becomes a small space you can look around.</dd>
+        <dt>Looking around</dt>
+        <dd>Move the cursor over the picture (or tilt your phone), drag, or let it sway. Depth and Movement in the 3D menu set how deep the space is and how far you can move.</dd>
+        <dt>Light in 3D</dt>
+        <dd>Every light change shows in 3D at once. The brightest lights also glow at their place in space, hidden by whatever is in front of them, and catch on surfaces as you move.</dd>
+      </dl>
       <h3 className="subhead">Keys</h3>
       <ul className="keys">
         {EFFECTS.map((m) => <li key={m.id}><kbd>{m.key}</kbd><span>{m.name}</span></li>)}
