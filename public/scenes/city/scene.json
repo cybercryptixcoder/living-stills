@@ -32,7 +32,7 @@
   ],
   "cost": 0.018,
   "demo": {
-    "order": 4,
+    "order": 6,
     "startMode": "dusk",
     "view": {
       "ambient": 0.7

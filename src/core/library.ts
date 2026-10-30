@@ -32,14 +32,14 @@ const base = import.meta.env.BASE_URL;
 const ext = (b: Blob) => (b.type.includes('png') ? 'png' : b.type.includes('webp') ? 'webp' : 'jpg');
 
 export function entryFromDoc(doc: SceneDoc, source: SceneEntry['source'], images?: Record<string, Blob>): SceneEntry {
-  const offKey = doc.method === 'layered' || doc.method === 'grid' ? 'off' : 'off';
+  const offKey = doc.draft ? 'base' : 'off';
   const url = (k: string) => (source === 'example' ? `${base}scenes/${doc.id}/${doc.images[k]}` : images?.[k]);
   return {
     id: doc.id, title: doc.title, method: doc.method, cost: doc.cost,
     imageCount: doc.steps.filter((s) => s.image).length,
     source, createdAt: doc.createdAt, order: doc.demo?.order ?? 100,
     thumbOff: doc.images[offKey] ? url(offKey) : undefined,
-    thumbOn: doc.images.on ? url('on') : undefined,
+    thumbOn: doc.images.on && !doc.draft ? url('on') : undefined,
     doc,
   };
 }
@@ -64,7 +64,7 @@ export async function listLocal(): Promise<SceneEntry[]> {
   const out: SceneEntry[] = [];
   for (const k of ks) {
     const v = await get<{ doc: SceneDoc; images: Record<string, Blob> }>(k, store);
-    if (v) out.push(entryFromDoc(v.doc, 'local', v.images));
+    if (v) out.push(entryFromDoc(upgrade(v.doc), 'local', v.images));
   }
   return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
@@ -73,7 +73,7 @@ export async function loadBundle(entry: SceneEntry): Promise<SceneBundle> {
   if (entry.source === 'local') {
     const v = await get<{ doc: SceneDoc; images: Record<string, Blob> }>(`scene:${entry.id}`, store);
     if (!v) throw new Error('This scene is no longer stored in this browser.');
-    return { ...v, source: 'local' };
+    return { ...v, doc: upgrade(v.doc), source: 'local' };
   }
   const doc = entry.doc;
   const images: Record<string, Blob> = {};
@@ -83,6 +83,15 @@ export async function loadBundle(entry: SceneEntry): Promise<SceneBundle> {
     images[k] = await r.blob();
   }));
   return { doc, images, source: 'example' };
+}
+
+/** Older scenes: "every frame" scenes are opened as their moving-layer scene (the extra frames are ignored). */
+export function upgrade(doc: SceneDoc): SceneDoc {
+  const d = doc as unknown as Omit<SceneDoc, 'method'> & { grid?: unknown; method: string };
+  if (d.method !== 'grid') return doc;
+  const keep = ['on', 'off', 'plateOn', 'plateOff'];
+  const { grid: _grid, ...rest } = d;
+  return { ...(rest as unknown as SceneDoc), method: 'layered', images: Object.fromEntries(Object.entries(doc.images).filter(([k]) => keep.includes(k))) };
 }
 
 export async function saveLocal(b: { doc: SceneDoc; images: Record<string, Blob> }) {
@@ -115,7 +124,7 @@ export async function importZip(file: Blob): Promise<{ doc: SceneDoc; images: Re
   const files = unzipSync(new Uint8Array(await file.arrayBuffer()));
   const raw = files['scene.json'];
   if (!raw) throw new Error('This file is not a Living Stills scene (scene.json is missing).');
-  const doc = JSON.parse(strFromU8(raw)) as SceneDoc;
+  const doc = upgrade(JSON.parse(strFromU8(raw)) as SceneDoc);
   const images: Record<string, Blob> = {};
   for (const [k, name] of Object.entries(doc.images)) {
     const data = files[name];

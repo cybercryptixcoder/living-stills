@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 // Analysis worker: decodes images and runs the light analysis off the main thread.
 
-import { analyzeScene, cropSource, plateSummary, type Decoded } from './sceneAnalysis';
+import { analyzeScene, cropSource, type Decoded } from './sceneAnalysis';
 import { detectElementRect } from './analysis';
 import type { AnalysisResult, Rect, SceneDoc } from './types';
 
@@ -43,6 +43,7 @@ function transferables(r: AnalysisResult): Transferable[] {
   const t = new Set<ArrayBufferLike>();
   for (const L of r.layers) [L.base, L.delta, L.ids, L.weights].forEach((a) => t.add(a.buffer));
   if (r.sprite) [r.sprite.lit, r.sprite.dark, r.sprite.spill].forEach((a) => t.add(a.buffer));
+  if (r.ambient) t.add(r.ambient.buffer);
   return [...t] as Transferable[];
 }
 
@@ -80,8 +81,6 @@ self.onmessage = async (e: MessageEvent) => {
     } else if (type === 'detectElement') {
       const [on, plate] = await Promise.all([get('on', [doc.width, doc.height]), get('plateOn', [doc.width, doc.height])]);
       self.postMessage({ id, ok: true, result: detectElementRect(on.data, plate.data, doc.width, doc.height) });
-    } else if (type === 'plate') {
-      self.postMessage({ id, ok: true, result: await plateSummary(doc, get) });
     } else if (type === 'reset') {
       currentImages = {};
       decodeCache.clear();

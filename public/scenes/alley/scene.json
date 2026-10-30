@@ -72,7 +72,7 @@
   ],
   "cost": 0.058,
   "demo": {
-    "order": 3,
+    "order": 7,
     "startMode": "hand",
     "view": {
       "ambient": 0.8

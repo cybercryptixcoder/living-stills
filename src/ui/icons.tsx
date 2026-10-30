@@ -80,6 +80,16 @@ export const Icons = {
     <I><path d="M3 10s2.6-4.2 7-4.2S17 10 17 10s-2.6 4.2-7 4.2S3 10 3 10z" /><path d="M4 16 16 4" /></I>
   ),
   shrink: () => <I><path d="M8 3v5H3M12 3v5h5M8 17v-5H3M12 17v-5h5" /></I>,
+  music: () => <I><path d="M7.5 15V5l8-1.6V13" /><circle cx="5.6" cy="15" r="1.9" /><circle cx="13.6" cy="13" r="1.9" /></I>,
+  mic: () => <I><rect x="7.5" y="2.8" width="5" height="9" rx="2.5" /><path d="M4.8 9.5a5.2 5.2 0 0 0 10.4 0M10 14.7v2.6" /></I>,
+  screen: () => <I><rect x="2.8" y="4" width="14.4" height="9.5" rx="1.5" /><path d="M7 17h6M10 13.5V17" /></I>,
+  chevron: () => <I><path d="M5.5 8 10 12.5 14.5 8" /></I>,
+  sliders: () => <I><path d="M4 5.5h12M4 10h12M4 14.5h12" /><circle cx="7" cy="5.5" r="1.6" fill="currentColor" /><circle cx="13" cy="10" r="1.6" fill="currentColor" /><circle cx="9" cy="14.5" r="1.6" fill="currentColor" /></I>,
+  presets: () => <I><rect x="3" y="3.5" width="6" height="6" rx="1.4" /><rect x="11" y="3.5" width="6" height="6" rx="1.4" /><rect x="3" y="11.5" width="6" height="5" rx="1.4" /><path d="M11.5 14h5M14 11.5v5" /></I>,
+  wand: () => <I><path d="M4 16 12.5 7.5" /><path d="M11 6l3 3" /><path d="M14.5 2.8v2M13.5 3.8h2M16.8 7.2v1.6M16 8h1.6M8.6 3.4v1.4M7.9 4.1h1.4" /></I>,
+  bulb: () => <I><path d="M7 13.2c0-2-2.2-3-2.2-5.7a5.2 5.2 0 0 1 10.4 0c0 2.7-2.2 3.7-2.2 5.7z" /><path d="M7.6 15.6h4.8M8.4 17.6h3.2" /></I>,
+  pin: () => <I><path d="M10 17.5s5-4.6 5-8.6a5 5 0 0 0-10 0c0 4 5 8.6 5 8.6z" /><circle cx="10" cy="8.9" r="1.8" /></I>,
+  lasso: () => <I><rect x="3.5" y="4.5" width="13" height="10" rx="1.5" strokeDasharray="2 2.2" /></I>,
   more: () => <I><circle cx="4.5" cy="10" r="1.1" fill="currentColor" stroke="none" /><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none" /><circle cx="15.5" cy="10" r="1.1" fill="currentColor" stroke="none" /></I>,
 };
 

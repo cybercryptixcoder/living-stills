@@ -202,13 +202,18 @@ export interface DeltaResult {
  * A change survives if it is coherent over a few pixels (blurred difference above the
  * noise floor) or very strong on its own (light cores).
  */
-export function computeDelta(onLin: Float32Array, offLin: Float32Array, w: number, h: number, gain: number, cleanup = 1, feather?: (x: number, y: number) => number): DeltaResult {
+export function computeDelta(onLin: Float32Array, offLin: Float32Array, w: number, h: number, gain: number, cleanup = 1, feather?: (x: number, y: number) => number, signed = false): DeltaResult {
   const n = w * h;
   const S = new Float32Array(n);
   for (let i = 0, j = 0; i < n; i++, j += 3) {
-    const a = 0.2126 * onLin[j] + 0.7152 * onLin[j + 1] + 0.0722 * onLin[j + 2];
-    const b = 0.2126 * offLin[j] + 0.7152 * offLin[j + 1] + 0.0722 * offLin[j + 2];
-    S[i] = a - gain * b;
+    if (signed) {
+      // how much changed, in any direction and colour (a yellow glow on white paper darkens blue)
+      S[i] = 0.2126 * Math.abs(onLin[j] - gain * offLin[j]) + 0.7152 * Math.abs(onLin[j + 1] - gain * offLin[j + 1]) + 0.0722 * Math.abs(onLin[j + 2] - gain * offLin[j + 2]);
+    } else {
+      const a = 0.2126 * onLin[j] + 0.7152 * onLin[j + 1] + 0.0722 * onLin[j + 2];
+      const b = 0.2126 * offLin[j] + 0.7152 * offLin[j + 1] + 0.0722 * offLin[j + 2];
+      S[i] = a - gain * b;
+    }
   }
   const sigma0 = Math.max(0.0015, robustSigma(S, n));
   const Sb = gaussBlur(S, w, h, 1.6);
@@ -220,10 +225,15 @@ export function computeDelta(onLin: Float32Array, offLin: Float32Array, w: numbe
   for (let y = 0, i = 0; y < h; y++)
     for (let x = 0; x < w; x++, i++) {
       const j = i * 3;
-      const dr = Math.max(0, onLin[j] - gain * offLin[j]);
-      const dg = Math.max(0, onLin[j + 1] - gain * offLin[j + 1]);
-      const db = Math.max(0, onLin[j + 2] - gain * offLin[j + 2]);
-      const l = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
+      let dr = onLin[j] - gain * offLin[j];
+      let dg = onLin[j + 1] - gain * offLin[j + 1];
+      let db = onLin[j + 2] - gain * offLin[j + 2];
+      let l: number;
+      if (signed) l = S[i];
+      else {
+        dr = Math.max(0, dr); dg = Math.max(0, dg); db = Math.max(0, db);
+        l = 0.2126 * dr + 0.7152 * dg + 0.0722 * db;
+      }
       let m = Math.max(smoothstep(a1, b1, Sb[i]), smoothstep(a2, b2, l));
       if (feather) m *= feather(x, y);
       if (m <= 0) continue;
@@ -233,13 +243,34 @@ export function computeDelta(onLin: Float32Array, offLin: Float32Array, w: numbe
   return { D, lumD, noise: sigma0 };
 }
 
+/**
+ * Does turning the lights on also darken or recolour things? True for glows drawn on white paper
+ * or recoloured objects; false for ordinary lights that only add light.
+ */
+export function looksSigned(onLin: Float32Array, offLin: Float32Array, n: number, gain: number): boolean {
+  const M = new Float32Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 3) M[i] = Math.abs(onLin[j] - gain * offLin[j]) + Math.abs(onLin[j + 1] - gain * offLin[j + 1]) + Math.abs(onLin[j + 2] - gain * offLin[j + 2]);
+  const tau = 8 * Math.max(0.003, robustSigma(M, n));
+  let pos = 0, neg = 0;
+  for (let i = 0, j = 0; i < n; i++, j += 3) {
+    if (M[i] < tau) continue;
+    for (let c = 0; c < 3; c++) {
+      const d = onLin[j + c] - gain * offLin[j + c];
+      if (d > 0) pos += d; else neg -= d;
+    }
+  }
+  return pos > 0 && neg > 0.55 * pos;
+}
+
 // ---------------------------------------------------------------- light cores
 
-export function findCoreMask(lumD: Float32Array, onLum: Float32Array, noise: number, strictness = 1): Uint8Array {
+export function findCoreMask(lumD: Float32Array, onLum: Float32Array, noise: number, strictness = 1, signed = false): Uint8Array {
   const p = percentile(lumD, 0.998, noise * 3);
   const tau = Math.max(0.3 * p * strictness, 9 * noise);
   const mask = new Uint8Array(lumD.length);
-  for (let i = 0; i < lumD.length; i++) if (lumD[i] > tau && lumD[i] > 0.45 * onLum[i]) mask[i] = 1;
+  // an emitter outshines what was there; on bright paper the change is a smaller share of the pixel
+  const share = signed ? 0.1 : 0.45;
+  for (let i = 0; i < lumD.length; i++) if (lumD[i] > tau && lumD[i] > share * onLum[i]) mask[i] = 1;
   return mask;
 }
 
@@ -305,8 +336,11 @@ function compFromPixels(pixels: number[], w: number, lumD: Float32Array, D: Floa
     if (l > peak) peak = l;
   }
   const f = Math.max(flux, 1e-9);
-  const m = Math.max(r, g, b, 1e-9);
-  return { pixels, x0, y0, x1, y1, flux, cx: sx / f, cy: sy / f, rgb: [r / m, g / m, b / m], peak };
+  r = Math.max(0, r); g = Math.max(0, g); b = Math.max(0, b);
+  const m = Math.max(r, g, b);
+  // signed scenes (glows on paper) can take light away in every channel: keep a neutral colour
+  const rgb: [number, number, number] = m > 1e-6 ? [r / m, g / m, b / m] : [1, 0.85, 0.6];
+  return { pixels, x0, y0, x1, y1, flux, cx: sx / f, cy: sy / f, rgb, peak };
 }
 
 /** Split a merged blob (a row of touching windows) at intensity valleys along its long axis. */
@@ -421,9 +455,9 @@ export interface LightModel {
 
 export function detectLights(
   D: Float32Array, lumD: Float32Array, onLum: Float32Array, w: number, h: number,
-  noise: number, opts: { strictness?: number; maxLights?: number; waterline?: number | null } = {},
+  noise: number, opts: { strictness?: number; maxLights?: number; waterline?: number | null; signed?: boolean } = {},
 ): LightModel {
-  const mask = findCoreMask(lumD, onLum, noise, opts.strictness ?? 1);
+  const mask = findCoreMask(lumD, onLum, noise, opts.strictness ?? 1, opts.signed);
   const { labels, count } = labelComponents(mask, w, h);
   const buckets: number[][] = Array.from({ length: count + 1 }, () => []);
   for (let i = 0; i < labels.length; i++) if (labels[i]) buckets[labels[i]].push(i);
@@ -673,11 +707,12 @@ export interface SplitResult {
   lumD: Float32Array;
   offLin: Float32Array;
   stats: { shift: [number, number]; gain: number; noise: number; cores: number };
+  signed: boolean;
 }
 
 export function analyzeSplit(
   onRGBA: Uint8ClampedArray, offRGBA: Uint8ClampedArray, w: number, h: number,
-  opts: { cleanup?: number; strictness?: number; maxLights?: number; waterline?: number | null } = {},
+  opts: { cleanup?: number; strictness?: number; maxLights?: number; waterline?: number | null; signed?: boolean; focus?: (x: number, y: number) => number } = {},
 ): SplitResult {
   const n = w * h;
   const onLin = rgbaToLinear(onRGBA, n);
@@ -690,10 +725,11 @@ export function analyzeSplit(
     offLum = luminance(offLin, n);
   }
   const gain = estimateGain(onLum, offLum);
-  const { D, lumD, noise } = computeDelta(onLin, offLin, w, h, gain, opts.cleanup ?? 1);
+  const signed = opts.signed ?? looksSigned(onLin, offLin, n, gain);
+  const { D, lumD, noise } = computeDelta(onLin, offLin, w, h, gain, opts.cleanup ?? 1, opts.focus, signed);
   let waterline = opts.waterline === undefined ? suggestWaterline(lumD, w, h)?.y ?? null : opts.waterline;
   if (waterline != null) waterline = Math.round(waterline);
-  const model = detectLights(D, lumD, onLum, w, h, noise, { strictness: opts.strictness, maxLights: opts.maxLights, waterline });
+  const model = detectLights(D, lumD, onLum, w, h, noise, { strictness: opts.strictness, maxLights: opts.maxLights, waterline, signed });
   const { ids, weights } = assignLights(lumD, model, { w, h, lights: model.lights, waterline });
   const groups = groupLights(model.lights, w, h);
   // Base = gain-matched, aligned lights-off image.
@@ -706,7 +742,7 @@ export function analyzeSplit(
   return {
     layer: { base: linearToRgba(baseLin, n), delta, ids, weights },
     lights: model.lights, groups, waterline, D, lumD, offLin: baseLin,
-    stats: { shift, gain, noise, cores: model.lights.length },
+    stats: { shift, gain, noise, cores: model.lights.length }, signed,
   };
 }
 

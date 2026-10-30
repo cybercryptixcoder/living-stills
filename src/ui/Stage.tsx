@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { live } from '../live';
+import { live, selectedIndices } from '../live';
+import { audio } from '../play/audio';
 import { makeRoute } from '../play/engine';
 import { Renderer } from '../render/Renderer';
 import { useStore } from '../state';
 import { switchSound, tickSound } from './sound';
 
 const S = () => useStore.getState();
-const GRID_FRAME_SECONDS = 1.7;
 export const TOUCH = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
 export interface ImageRect { x: number; y: number; w: number; h: number }
@@ -14,11 +14,6 @@ export interface ImageRect { x: number; y: number; w: number; h: number }
 export const stageRect: ImageRect = { x: 0, y: 0, w: 1, h: 1 };
 /** The same rectangle in the stage element's own coordinates. */
 const local: ImageRect & { left: number; top: number } = { x: 0, y: 0, w: 1, h: 1, left: 0, top: 0 };
-
-function smooth(a: number, b: number, x: number) {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-}
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
@@ -38,6 +33,7 @@ export function Stage() {
   const [tip, setTip] = useState<{ x: number; y: number; title: string; sub: string } | null>(null);
   const drawing = useRef<[number, number][] | null>(null);
   const press = useRef<{ t: number; x: number; y: number; timer: number } | null>(null);
+  const boxSel = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const ripplesUi = useRef<{ x: number; y: number; t0: number }[]>([]);
   const heatRef = useRef<{ c: HTMLCanvasElement; ctx: CanvasRenderingContext2D; field: Float32Array; img: ImageData; w: number; h: number } | null>(null);
 
@@ -166,13 +162,13 @@ export function Stage() {
       octx.clearRect(0, 0, overlay.current!.width, overlay.current!.height);
       if (!a || !r.loaded) return;
       const e = live.engine;
-      e.mode = st.mode;
+      if (e.mode !== 'show' || st.mode !== 'hand') e.mode = st.mode;
       e.params = st.params;
-      e.groups = st.groups;
       e.master = st.master;
-      e.elementFader = st.elementFader;
       e.warmth = st.view.warmth;
       e.feel = st.feel;
+      audio.sensitivity = st.music.sensitivity;
+      e.audio = audio.active ? audio.update(dt) : null;
 
       // motion
       let layerA = 0, layerB = 0, mix = 0, spriteDx = 0;
@@ -187,17 +183,7 @@ export function Stage() {
         spriteDx = live.motionDx;
         e.setElementPos(rx + rw / 2 + spriteDx, a.sprite.rect[1] + a.sprite.rect[3] / 2);
       }
-      if (a.layers.length > 1 && doc?.method === 'grid') {
-        const F = a.layers.length;
-        if (st.motion.playing) live.gridPhase = (live.gridPhase + (dt * st.motion.speed) / GRID_FRAME_SECONDS) % F;
-        const f = Math.floor(live.gridPhase);
-        const localMix = live.gridPhase - f;
-        layerA = f % F;
-        layerB = (f + 1) % F;
-        const b = st.motion.blend;
-        mix = b <= 0.01 ? 0 : smooth(1 - b, 1, localMix);
-        e.setFramePos(layerA, layerB, mix);
-      } else if (a.editedLayer != null) {
+      if (a.editedLayer != null) {
         layerA = st.variant === 'edits' ? a.editedLayer : 0;
       }
       e.step(dt);
@@ -205,7 +191,7 @@ export function Stage() {
       const el = e.elementOutput();
       const v = st.view;
       r.draw({
-        layerA, layerB, mix, ambient: v.ambient, exposure: v.exposure, glow: v.glow, haze: v.haze, grain: v.grain,
+        layerA, layerB, mix, ambient: v.ambient, daylight: v.daylight, exposure: v.exposure, glow: v.glow, haze: v.haze, grain: v.grain,
         spriteDx, spriteT: el.t, spriteGain: el.gain, radius: 0,
         backdrop: 0,
       }, now / 1000);
@@ -220,20 +206,10 @@ export function Stage() {
         document.querySelectorAll<HTMLElement>('[data-lit-text]').forEach((n) => {
           n.textContent = `${Math.round(e.litness * 100)}%`;
         });
-        // channel lamps
-        const lamps = document.querySelectorAll<HTMLElement>('[data-lamp]');
-        if (lamps.length) {
-          const sums = new Float32Array(st.groups.length), counts = new Float32Array(st.groups.length);
-          e.lights.forEach((L, i) => { if (L.group < sums.length) { sums[L.group] += e.level[i]; counts[L.group]++; } });
-          lamps.forEach((lamp) => {
-            const id = lamp.dataset.lamp!;
-            let val = 0;
-            if (id === 'all') val = e.litness;
-            else if (id === 'el') val = e.hasElement ? e.level[e.count - 1] : 0;
-            else { const g = +id; val = counts[g] ? sums[g] / counts[g] : 0; }
-            lamp.style.setProperty('--g', Math.min(1, val).toFixed(3));
-          });
-        }
+        const vu = document.querySelector<HTMLElement>('[data-vu]');
+        if (vu) vu.style.width = `${Math.round((e.audio?.level ?? 0) * 100)}%`;
+        const stt = document.querySelector<HTMLElement>('[data-show-time]');
+        if (stt && e.show) stt.textContent = `${e.showTime.toFixed(0)} / ${e.show.compiled.length.toFixed(0)} s`;
       }
 
       // overlay
@@ -278,13 +254,10 @@ export function Stage() {
         for (let i = 0; i < e.lights.length; i++) {
           const lv = e.level[i];
           const picked = st.picked.includes(e.lights[i].id);
-          const inGroup = st.hoverGroup != null && e.lights[i].group === st.hoverGroup;
           if (picked) {
             ring(e.posX[i], e.posY[i], lightRadius(i) + 2, 'rgba(240,105,42,0.95)', 1.6);
             dot(e.posX[i], e.posY[i], 3, 'rgba(255,190,140,1)');
-          } else {
-            dot(e.posX[i], e.posY[i], inGroup ? 3.2 : 2.2, `rgba(${lv > 0.5 ? '255,196,130' : '245,240,230'},${inGroup ? 0.95 : 0.3 + 0.45 * lv})`);
-          }
+          } else dot(e.posX[i], e.posY[i], 2.2, `rgba(${lv > 0.5 ? '255,196,130' : '245,240,230'},${0.3 + 0.45 * lv})`);
         }
       }
       if (st.previewWaterline != null) {
@@ -301,19 +274,38 @@ export function Stage() {
         octx.font = '12px "Space Mono", monospace';
         octx.fillText('Reflections below this line', rect.x + 12, Y - 8);
       }
-      if (st.hoverGroup != null) {
-        for (let i = 0; i < e.lights.length; i++)
-          if (e.lights[i].group === st.hoverGroup) ring(e.posX[i], e.posY[i], lightRadius(i), 'rgba(255,226,176,0.9)', 1.2);
-        if (st.hoverGroup === -2 && e.hasElement) {
-          const i = e.count - 1;
-          ring(e.posX[i], e.posY[i], 26, 'rgba(255,226,176,0.9)', 1.2);
+      // what the light panel controls: a marching outline round each light
+      if (st.selection) {
+        const ix = selectedIndices();
+        const march = -(performance.now() / 60) % 8;
+        octx.lineDashOffset = march;
+        for (const i of ix) {
+          if (i >= e.lights.length) { ring(e.posX[i], e.posY[i], 24, 'rgba(255,255,255,0.95)', 1.6, [4, 4]); continue; }
+          ring(e.posX[i], e.posY[i], lightRadius(i) + 4, 'rgba(20,16,12,0.55)', 3.2);
+          ring(e.posX[i], e.posY[i], lightRadius(i) + 4, 'rgba(255,248,236,0.98)', 1.5, [4, 4]);
         }
+        octx.lineDashOffset = 0;
       }
-      if (st.hovered != null && st.hovered < e.lights.length && (st.mode === 'hand' || st.picking)) {
-        ring(e.posX[st.hovered], e.posY[st.hovered], lightRadius(st.hovered) + 3, 'rgba(255,214,140,0.95)', 1.5);
+      if (st.hovered != null && (st.mode === 'hand' || st.mode === 'show' || st.picking)) {
+        const i = st.hovered;
+        if (i < e.lights.length) {
+          // the whole group it belongs to, faintly, so you can see what "its group" would be
+          const z = st.zones[e.zoneOf[i]];
+          if (z && z.lights.length > 1 && !st.picking) for (const j of z.lights) if (j !== i) dot(e.posX[j], e.posY[j], 2.4, 'rgba(255,240,220,0.75)');
+          ring(e.posX[i], e.posY[i], lightRadius(i) + 3, 'rgba(255,214,140,0.95)', 1.6);
+        } else if (e.hasElement) ring(e.posX[i], e.posY[i], 26, 'rgba(255,226,176,0.9)', 1.4);
       }
-      if (st.selected != null && st.selected < e.count) {
-        ring(e.posX[st.selected], e.posY[st.selected], (st.selected < e.lights.length ? lightRadius(st.selected) : 24) + 5, 'rgba(240,105,42,0.95)', 1.4, [3, 3]);
+      const box = boxSel.current;
+      if (box) {
+        const [X0, Y0] = toScreen(Math.min(box.x0, box.x1), Math.min(box.y0, box.y1));
+        const [X1, Y1] = toScreen(Math.max(box.x0, box.x1), Math.max(box.y0, box.y1));
+        octx.setLineDash([5, 4]);
+        octx.strokeStyle = 'rgba(255,248,236,0.95)';
+        octx.lineWidth = 1.4;
+        octx.fillStyle = 'rgba(240,105,42,0.12)';
+        octx.fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+        octx.strokeRect(X0, Y0, X1 - X0, Y1 - Y0);
+        octx.setLineDash([]);
       }
       const p = e.pointer;
       if (p.inside && !st.picking && (st.mode === 'torch' || st.mode === 'paint' || st.mode === 'trail')) {
@@ -389,22 +381,22 @@ export function Stage() {
       const changed = e.paintAt(q.x, q.y, !(st.params.erase || ev.altKey));
       if (changed.length) switchSound(!(st.params.erase || ev.altKey));
     }
-    if (st.mode === 'hand' || st.picking) {
+    if (boxSel.current) { boxSel.current.x1 = q.x; boxSel.current.y1 = q.y; if (tip) setTip(null); return; }
+    if (st.mode === 'hand' || st.mode === 'show' || st.picking) {
       const i = q.inside ? pickAt(q.x, q.y, q.scale) : -1;
       const hovered = i >= 0 ? i : null;
       if (hovered !== st.hovered) st.set({ hovered });
-      if (i >= 0 && i < e.lights.length) {
-        const L = e.lights[i];
+      if (i >= 0) {
         const box = wrap.current!.getBoundingClientRect();
-        const g = st.scene?.groups[L.group]?.name;
+        const isEl = i >= e.lights.length;
+        const z = isEl ? null : st.zones[e.zoneOf[i]];
         setTip({
           x: ev.clientX - box.left, y: ev.clientY - box.top,
-          title: st.scene?.doc.method === 'grid' ? (g ?? `Light ${L.id}`) : `Light ${L.id}${g ? ` · ${g}` : ''}`,
-          sub: st.picking ? (st.picked.includes(L.id) ? 'Click to leave it out' : 'Click to choose it') : TOUCH ? 'Tap to switch. Hold for colour.' : 'Click to switch. Right-click for colour.',
+          title: isEl ? capital(st.scene?.elementName ?? 'Moving light') : z?.name ?? 'Light',
+          sub: st.picking
+            ? (st.picked.includes(e.lights[i].id) ? 'Click to leave it out' : 'Click to choose it')
+            : TOUCH ? 'Tap to adjust' : 'Click to adjust · Shift-click to add',
         });
-      } else if (i >= 0 && e.hasElement && i === e.count - 1) {
-        const box = wrap.current!.getBoundingClientRect();
-        setTip({ x: ev.clientX - box.left, y: ev.clientY - box.top, title: st.scene?.elementName ? capital(st.scene.elementName) : 'Moving light', sub: 'Click to switch. Right-click for colour.' });
       } else setTip(null);
     } else if (tip) setTip(null);
   };
@@ -425,7 +417,7 @@ export function Stage() {
       if (press.current) clearTimeout(press.current.timer);
       press.current = i >= 0 ? {
         t: performance.now(), x: ev.clientX, y: ev.clientY,
-        timer: window.setTimeout(() => { S().set({ selected: i }); tickSound(); press.current = null; }, 520),
+        timer: window.setTimeout(() => { S().set({ selection: { anchor: i, scope: 'light', picked: [i] } }); tickSound(); press.current = null; }, 520),
       } : null;
     }
     (ev.currentTarget as HTMLElement).setPointerCapture(ev.pointerId);
@@ -440,14 +432,33 @@ export function Stage() {
       return;
     }
     switch (st.mode) {
+      case 'show':
       case 'hand': {
         const i = pickAt(q.x, q.y, q.scale);
-        if (i >= 0) {
+        if (ev.altKey && i >= 0) {
+          // quick switch without opening the panel
           const on = e.base[i] < 0.5;
           e.base[i] = on ? 1 : 0;
           switchSound(on);
-          if (st.selected != null) st.set({ selected: i });
-        } else if (st.selected != null) st.set({ selected: null });
+          st.set({ rev: st.rev + 1 });
+          break;
+        }
+        if (ev.shiftKey) {
+          if (i >= 0) {
+            const cur = st.selection ? selectedIndices() : [];
+            const picked = cur.includes(i) ? cur.filter((x) => x !== i) : [...cur, i];
+            st.set({ selection: picked.length ? { anchor: picked[picked.length - 1], scope: picked.length > 1 ? 'picked' : 'light', picked } : null, menu: null });
+            tickSound();
+          } else boxSel.current = { x0: q.x, y0: q.y, x1: q.x, y1: q.y };
+          break;
+        }
+        if (i >= 0) {
+          const already = st.selection?.anchor === i && st.selection.scope !== 'picked';
+          const scope = already ? st.selection!.scope : st.scene?.doc.markers?.length ? 'zone' : 'light';
+          st.set({ selection: { anchor: i, scope, picked: [i] }, menu: null });
+          tickSound();
+        } else if (st.selection) st.set({ selection: null });
+        else boxSel.current = { x0: q.x, y0: q.y, x1: q.x, y1: q.y };
         break;
       }
       case 'paint': {
@@ -461,7 +472,6 @@ export function Stage() {
       case 'sweep':
       case 'breathe':
       case 'flicker':
-      case 'dusk':
       case 'trail':
         e.addRipple(q.x, q.y);
         ripplesUi.current.push({ x: q.x, y: q.y, t0: performance.now() / 1000 });
@@ -475,6 +485,16 @@ export function Stage() {
     e.pointer.down = false;
     if (press.current) { clearTimeout(press.current.timer); press.current = null; }
     if (ev?.pointerType === 'touch' && S().mode !== 'trail') e.pointer.inside = false;
+    const box = boxSel.current;
+    if (box) {
+      boxSel.current = null;
+      const x0 = Math.min(box.x0, box.x1), x1 = Math.max(box.x0, box.x1), y0 = Math.min(box.y0, box.y1), y1 = Math.max(box.y0, box.y1);
+      if (x1 - x0 > 4 && y1 - y0 > 4) {
+        const picked: number[] = [];
+        for (let i = 0; i < e.lights.length; i++) if (e.posX[i] >= x0 && e.posX[i] <= x1 && e.posY[i] >= y0 && e.posY[i] <= y1) picked.push(i);
+        if (picked.length) { S().set({ selection: { anchor: picked[0], scope: picked.length > 1 ? 'picked' : 'light', picked }, menu: null }); tickSound(); }
+      }
+    }
     if (drawing.current) {
       const route = makeRoute(drawing.current);
       if (route) { e.route = route; e.routeS = 0; tickSound(); S().set({ routeReady: true }); }
@@ -488,12 +508,12 @@ export function Stage() {
     const i = pickAt(q.x, q.y, q.scale);
     if (i >= 0) {
       ev.preventDefault();
-      S().set({ selected: i });
+      S().set({ selection: { anchor: i, scope: 'light', picked: [i] }, menu: null });
       tickSound();
     }
   };
 
-  const cursor = picking ? 'crosshair' : mode === 'hand' ? (tip ? 'pointer' : 'default') : mode === 'route' ? 'crosshair' : mode === 'torch' || mode === 'trail' || mode === 'paint' ? 'none' : 'default';
+  const cursor = picking ? 'crosshair' : mode === 'hand' || mode === 'show' ? (tip ? 'pointer' : 'default') : mode === 'route' ? 'crosshair' : mode === 'torch' || mode === 'trail' || mode === 'paint' ? 'none' : 'default';
 
   return (
     <div className="stage" ref={wrap}>
@@ -528,7 +548,7 @@ export function Stage() {
         <div className="stage__msg stage__msg--error" role="alert"><p>{statusText}</p></div>
       )}
       {!hasScene && status === 'idle' && (
-        <div className="stage__msg"><p>Choose a scene, or paint a new one.</p></div>
+        <div className="stage__msg"><p>Choose a scene, or make a new one.</p></div>
       )}
     </div>
   );

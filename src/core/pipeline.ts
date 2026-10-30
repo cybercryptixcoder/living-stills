@@ -5,9 +5,10 @@ import { analyzer } from './analyzer';
 import { contextCrop } from './analysis';
 import { generateImage, pool, priceOf } from './openrouter';
 import {
-  LIGHTS_OFF_PROMPT, SINGLE_LIGHT_WITH_REFERENCE_PROMPT, elementLightsPrompt, groupLightsPrompt, removeElementPrompt, scenePrompt, styleById,
+  DARK_VERSION_PROMPT, SINGLE_LIGHT_WITH_REFERENCE_PROMPT, basePrompt, lightFromTextPrompt, lightUpPrompt, lightsOffPrompt, recreatePrompt,
+  removeElementPrompt, scenePrompt,
 } from './prompts';
-import type { GridGroupSpec, GridSpec, LightInfo, GroupInfo, Rect, Refinement, SceneDoc, StepLog } from './types';
+import type { LightInfo, Marker, Rect, Refinement, SceneDoc, StepLog } from './types';
 
 export type StepStatus = 'waiting' | 'running' | 'done' | 'failed';
 
@@ -34,7 +35,7 @@ export interface CreateParams {
   resolution: string;
   aspect: string;
   description: string;
-  styleId: string;
+  lighting?: string;
   element?: string;
   title?: string;
   signal?: AbortSignal;
@@ -42,12 +43,25 @@ export interface CreateParams {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+const MEDIA = /\b(photo|photograph|picture|image|sketch|drawing|painting|illustration|render|art|artwork|watercolou?r|gouache|etching|print|poster|scene|shot|view)\b/i;
+const STOP = new Set(['on', 'in', 'at', 'with', 'by', 'under', 'over', 'near', 'during', 'from', 'seen', 'and', 'where', 'while', 'that', 'which']);
+
+/** A short title from a description: drops the medium ("a pen sketch of…") and stops at the first preposition. */
 export function titleFrom(description: string) {
-  const words = description.replace(/[^\p{L}\p{N}\s'-]/gu, ' ').split(/\s+/).filter(Boolean);
-  const skip = new Set(['a', 'an', 'the', 'small', 'little', 'of', 'with', 'and', 'at', 'in', 'on']);
-  const keep = words.filter((w, i) => !(i === 0 && skip.has(w.toLowerCase()))).slice(0, 4);
-  const t = keep.join(' ');
-  return t.charAt(0).toUpperCase() + t.slice(1);
+  let t = description.trim().split(/[.,;:\n]/)[0];
+  const of = t.toLowerCase().indexOf(' of ');
+  if (of > 0 && MEDIA.test(t.slice(0, of))) t = t.slice(of + 4);
+  const words = t.replace(/[^\p{L}\p{N}\s'-]/gu, ' ').split(/\s+/).filter(Boolean);
+  const skip = new Set(['a', 'an', 'the', 'small', 'little', 'tiny']);
+  const keep: string[] = [];
+  for (const w of words) {
+    if (!keep.length && skip.has(w.toLowerCase())) continue;
+    if (keep.length >= 2 && STOP.has(w.toLowerCase())) break;
+    keep.push(w);
+    if (keep.length >= 4) break;
+  }
+  const out = keep.join(' ') || 'Untitled';
+  return out.charAt(0).toUpperCase() + out.slice(1);
 }
 
 class Tracker {
@@ -93,26 +107,27 @@ export function estimateCreate(model: string, resolution: string, withElement: b
 }
 
 export async function createScene(p: CreateParams, report: Report): Promise<Bundle> {
-  const style = styleById(p.styleId);
   const element = p.element?.trim() || undefined;
+  const lighting = p.lighting?.trim() || undefined;
   const steps = [
-    { id: 'paint', label: 'Painting the scene' },
-    { id: 'off', label: 'Switching every light off' },
+    { id: 'paint', label: 'Making the picture, lights on' },
+    { id: 'off', label: 'Switching the lights off' },
   ];
   if (element) steps.push({ id: 'plate', label: `Taking ${element} out` }, { id: 'plateOff', label: 'Switching the lights off without it' });
   const t = new Tracker(steps, report);
   const opts = { key: p.key, model: p.model, resolution: p.resolution, aspectRatio: p.aspect, signal: p.signal };
-  const prompt = scenePrompt(p.description, style, element);
+  const prompt = scenePrompt(p.description, lighting, element);
+  const offPrompt = lightsOffPrompt(lighting);
   const images: Record<string, Blob> = {};
 
   images.on = (await t.run('paint', () => generateImage({ ...opts, prompt }), p.model, 'on')).blob;
   const jobs: Promise<void>[] = [
-    t.run('off', () => generateImage({ ...opts, prompt: LIGHTS_OFF_PROMPT, refs: [images.on] }), p.model, 'off').then((r) => { images.off = r.blob; }),
+    t.run('off', () => generateImage({ ...opts, prompt: offPrompt, refs: [images.on] }), p.model, 'off').then((r) => { images.off = r.blob; }),
   ];
   if (element) {
     jobs.push((async () => {
       images.plateOn = (await t.run('plate', () => generateImage({ ...opts, prompt: removeElementPrompt(element), refs: [images.on] }), p.model, 'plateOn')).blob;
-      images.plateOff = (await t.run('plateOff', () => generateImage({ ...opts, prompt: LIGHTS_OFF_PROMPT, refs: [images.plateOn] }), p.model, 'plateOff')).blob;
+      images.plateOff = (await t.run('plateOff', () => generateImage({ ...opts, prompt: offPrompt, refs: [images.plateOn] }), p.model, 'plateOff')).blob;
     })());
   }
   await Promise.all(jobs);
@@ -120,7 +135,7 @@ export async function createScene(p: CreateParams, report: Report): Promise<Bund
   const [w, h] = await dims(images.on);
   const id = `${Date.now().toString(36)}-${uid()}`;
   const doc: SceneDoc = {
-    version: 1, id, title: p.title?.trim() || titleFrom(p.description), prompt: p.description, style: style.id,
+    version: 1, id, title: p.title?.trim() || titleFrom(p.description), prompt: p.description, lighting,
     createdAt: new Date().toISOString(), model: p.model, resolution: p.resolution, width: w, height: h,
     method: element ? 'layered' : 'split',
     images: Object.fromEntries(Object.keys(images).map((k) => [k, k])),
@@ -219,8 +234,8 @@ export async function refineLights(b: Bundle, token: string, p: RefineParams, re
 export async function repaintOff(b: Bundle, p: { key: string; model: string; signal?: AbortSignal }, report: Report): Promise<Bundle> {
   const t = new Tracker([{ id: 'off', label: 'Switching every light off again' }], report);
   const aspect = aspectString(b.doc.width, b.doc.height, { aspects: ['21:9', '2:1', '16:9', '3:2', '7:5', '4:3', '5:4', '1:1', '4:5', '3:4', '5:7', '2:3', '9:16'] });
-  const r = await t.run('off', () => generateImage({ key: p.key, model: p.model, resolution: b.doc.resolution, aspectRatio: aspect, prompt: LIGHTS_OFF_PROMPT, refs: [b.images.on], signal: p.signal }), p.model, 'off');
-  const keep = (k: string) => k === 'on' || k === 'off';
+  const r = await t.run('off', () => generateImage({ key: p.key, model: p.model, resolution: b.doc.resolution, aspectRatio: aspect, prompt: lightsOffPrompt(b.doc.lighting), refs: [b.images.on], signal: p.signal }), p.model, 'off');
+  const keep = (k: string) => k === 'on' || k === 'off' || k === 'ambient';
   const doc: SceneDoc = {
     ...b.doc,
     method: 'split',
@@ -230,95 +245,158 @@ export async function repaintOff(b: Bundle, p: { key: string; model: string; sig
     cost: 0,
   };
   doc.cost = doc.steps.reduce((a, x) => a + x.cost, 0);
-  return { doc, images: { on: b.images.on, off: r.blob } };
+  return { doc, images: { ...(b.images.ambient ? { ambient: b.images.ambient } : {}), on: b.images.on, off: r.blob } };
 }
 
-// ---------------------------------------------------------------- the full grid (frames x lights)
+// ---------------------------------------------------------------- two stages: picture first, lights placed by hand
 
-export interface GridPlan {
-  frames: number;
-  groups: GroupInfo[]; // static groups from the plate analysis to include
-  includeElement: boolean;
+export type BaseKind = 'dark' | 'ambient';
+
+export interface BaseParams {
+  key: string;
+  model: string;
+  resolution: string;
+  aspect: string;
+  description: string;
+  lighting?: string;
+  kind: BaseKind;
+  title?: string;
+  signal?: AbortSignal;
 }
 
-export function gridOffsets(doc: SceneDoc, frames: number): number[] {
-  const m = doc.motion!;
-  const [rx, , rw] = m.rect;
-  const margin = 0.03 * doc.width;
-  let lo = -rx + margin, hi = doc.width - rx - rw - margin;
-  if (hi < lo) { const c = (lo + hi) / 2; lo = c - doc.width * 0.25; hi = c + doc.width * 0.25; }
-  const out: number[] = [];
-  for (let f = 0; f < frames; f++) out.push(Math.round(frames === 1 ? 0 : lo + ((hi - lo) * f) / (frames - 1)));
-  return m.dir === 1 ? out : out.reverse();
-}
-
-export function gridCellCount(plan: GridPlan) {
-  return plan.frames * (plan.groups.length + (plan.includeElement ? 1 : 0));
-}
-
-export async function buildGrid(
-  b: Bundle, token: string, plan: GridPlan, plateLights: LightInfo[],
-  p: { key: string; model: string; aspect: string; signal?: AbortSignal }, report: Report,
-): Promise<Bundle> {
-  const doc0 = b.doc;
-  const { width: w, height: h } = doc0;
-  const motion = doc0.motion!;
-  const offsets = gridOffsets(doc0, plan.frames);
-  const groups: GridGroupSpec[] = [];
-  let nextId = 1;
-  if (plan.includeElement) groups.push({ id: nextId++, name: capital(motion.element.replace(/^the /, '')), kind: 'moving' });
-  for (const g of plan.groups) {
-    const ls = plateLights.filter((L) => g.lights.includes(L.id));
-    const x0 = Math.min(...ls.map((L) => L.bbox[0])), y0 = Math.min(...ls.map((L) => L.bbox[1]));
-    const x1 = Math.max(...ls.map((L) => L.bbox[2])), y1 = Math.max(...ls.map((L) => L.bbox[3]));
-    groups.push({ id: nextId++, name: `Lights ${g.name}`, kind: 'static', region: [x0, y0, x1 - x0 + 1, y1 - y0 + 1], lights: g.lights });
-  }
-  const cells: { f: number; g: GridGroupSpec; crop: Rect }[] = [];
-  for (let f = 0; f < plan.frames; f++)
-    for (const g of groups) {
-      let crop: Rect;
-      if (g.kind === 'moving') {
-        const [rx, ry, rw, rh] = motion.rect;
-        crop = contextCrop([rx + offsets[f], ry, rw, rh], w, h, w / h, 1.35, Math.round(w * 0.2));
-      } else crop = contextCrop(g.region!, w, h, w / h, 1.3, Math.round(w * 0.2));
-      cells.push({ f, g, crop });
-    }
-  const t = new Tracker(cells.map((c) => ({ id: `f${c.f}g${c.g.id}`, label: `Frame ${c.f + 1}, ${c.g.name}` })), report);
-  const images = { ...b.images };
-  const spec: GridSpec = { frames: plan.frames, offsets, groups, cells: [] };
-  await pool(cells, 3, async (c) => {
-    // first image: this frame with every light off; second: how those lights look when on
-    const [input, lit] = await Promise.all([
-      analyzer().crop(doc0, b.images, token, { kind: 'gridFrame', dx: offsets[c.f] }, c.crop, 1024),
-      c.g.kind === 'moving'
-        ? analyzer().crop(doc0, b.images, token, { kind: 'gridFrame', dx: offsets[c.f], litElement: true }, c.crop, 1024)
-        : analyzer().crop(doc0, b.images, token, { kind: 'image', key: 'plateOn' }, c.crop, 1024),
-    ]);
-    const key = `grid_f${c.f}_g${c.g.id}`;
-    const prompt = c.g.kind === 'moving' ? elementLightsPrompt(motion.element) : groupLightsPrompt(motion.element);
-    const r = await t.run(`f${c.f}g${c.g.id}`, () => generateImage({ key: p.key, model: p.model, resolution: '768', aspectRatio: p.aspect, prompt, refs: [input, lit], signal: p.signal }), p.model, key);
-    images[key] = r.blob;
-    spec.cells.push({ f: c.f, g: c.g.id, crop: c.crop, image: key });
-  });
-  spec.cells.sort((a, c) => a.f - c.f || a.g - c.g);
-  const id = `${Date.now().toString(36)}-${uid()}`;
-  const keep = ['on', 'off', 'plateOn', 'plateOff'];
+/** Stage one: just the picture. The result is a draft scene the user places lights on. */
+export async function createBase(p: BaseParams, report: Report): Promise<Bundle> {
+  const t = new Tracker([{ id: 'base', label: 'Making the picture' }], report);
+  const r = await t.run('base', () => generateImage({ key: p.key, model: p.model, resolution: p.resolution, aspectRatio: p.aspect, prompt: basePrompt(p.description), signal: p.signal }), p.model, 'base');
+  const [w, h] = await dims(r.blob);
   const doc: SceneDoc = {
-    ...doc0,
-    id,
-    title: `${doc0.title}, every frame`,
-    method: 'grid',
-    createdAt: new Date().toISOString(),
-    grid: spec,
-    refinements: undefined,
-    images: Object.fromEntries([...keep, ...spec.cells.map((c) => c.image)].map((k) => [k, k])),
-    steps: [...doc0.steps.filter((s) => !s.image || keep.includes(s.image)), ...t.log],
-    cost: doc0.steps.filter((s) => !s.image || keep.includes(s.image)).reduce((a, s) => a + s.cost, 0) + t.cost,
-    demo: undefined,
+    version: 1, id: `${Date.now().toString(36)}-${uid()}`, title: p.title?.trim() || titleFrom(p.description),
+    prompt: p.description, lighting: p.lighting?.trim() || undefined, createdAt: new Date().toISOString(),
+    model: p.model, resolution: p.resolution, width: w, height: h, method: 'split',
+    images: { base: 'base' }, steps: t.log, cost: t.cost, draft: { kind: p.kind, aspect: p.aspect }, markers: [],
   };
+  return { doc, images: { base: r.blob } };
+}
+
+export interface LightUpParams {
+  key: string;
+  model: string;
+  markers: Marker[];
+  lighting?: string;
+  /** what each marker is and how it should glow (from the planner, or the user's own notes) */
+  plan: { n: number; object: string; how: string }[];
+  signal?: AbortSignal;
+}
+
+/** Stage two: the dark version (if the picture was ambient) and the version with the placed lights on. */
+export async function lightUp(b: Bundle, p: LightUpParams, report: Report): Promise<Bundle> {
+  const draft = b.doc.draft!;
+  const ambient = draft.kind === 'ambient';
+  const steps = ambient
+    ? [{ id: 'off', label: 'Making the dark version' }, { id: 'on', label: 'Switching your lights on' }]
+    : [{ id: 'on', label: 'Switching your lights on' }];
+  const t = new Tracker(steps, report);
+  const opts = { key: p.key, model: p.model, resolution: b.doc.resolution, aspectRatio: draft.aspect, signal: p.signal };
+  const images: Record<string, Blob> = {};
+  if (ambient) {
+    images.ambient = b.images.base;
+    images.off = (await t.run('off', () => generateImage({ ...opts, prompt: DARK_VERSION_PROMPT, refs: [b.images.base] }), p.model, 'off')).blob;
+  } else images.off = b.images.base;
+  const prompt = lightUpPrompt(p.plan, p.lighting);
+  images.on = (await t.run('on', () => generateImage({ ...opts, prompt, refs: [images.off] }), p.model, 'on')).blob;
+  const baseStep = b.doc.steps.map((s) => (s.image === 'base' ? { ...s, image: ambient ? 'ambient' : 'off' } : s));
+  const doc: SceneDoc = {
+    ...b.doc,
+    draft: undefined,
+    lighting: p.lighting?.trim() || b.doc.lighting,
+    markers: p.markers,
+    images: Object.fromEntries(Object.keys(images).map((k) => [k, k])),
+    steps: [...baseStep, ...t.log],
+    cost: 0,
+  };
+  doc.cost = doc.steps.reduce((a, x) => a + x.cost, 0);
   return { doc, images };
 }
 
-function capital(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+
+// ---------------------------------------------------------------- starting from a photo
+
+export const ASPECTS = ['21:9', '2:1', '16:9', '3:2', '7:5', '4:3', '5:4', '1:1', '4:5', '3:4', '5:7', '2:3', '9:16'];
+
+/** Shrinks a photo to at most `max` px on its long side, as JPEG (phones take 12-megapixel photos). */
+export async function preparePhoto(file: Blob, max = 1536): Promise<{ blob: Blob; w: number; h: number }> {
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * s), h = Math.round(bmp.height * s);
+  const c = new OffscreenCanvas(w, h);
+  const ctx = c.getContext('2d')!;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  return { blob: await c.convertToBlob({ type: 'image/jpeg', quality: 0.9 }), w, h };
+}
+
+export interface PhotoParams {
+  key: string;
+  model: string;
+  resolution: string;
+  photo: Blob;
+  recreate: boolean;
+  changes?: string;
+  /** what to make: just the picture (a draft to light later), lights from a description, or lights placed by hand */
+  then: 'picture' | 'describe' | 'place';
+  /** dark: its lights are off; ambient: an everyday picture (a dark version is made); lit: its lights are already on */
+  kind: BaseKind | 'lit';
+  lighting?: string;
+  title?: string;
+  signal?: AbortSignal;
+}
+
+/** A photo (or a scan of artwork) as the start of a scene. Returns a draft, or a finished scene for 'describe'. */
+export async function fromPhoto(p: PhotoParams, report: Report): Promise<Bundle> {
+  const { blob: photo, w: pw, h: ph } = await preparePhoto(p.photo);
+  const aspect = aspectString(pw, ph, { aspects: ASPECTS });
+  const describe = p.then === 'describe';
+  const steps: { id: string; label: string }[] = [];
+  if (p.recreate) steps.push({ id: 'base', label: p.changes?.trim() ? 'Recreating your picture, with your changes' : 'Recreating your picture' });
+  if (describe && p.kind === 'ambient') steps.push({ id: 'off', label: 'Making the dark version' });
+  if (describe && p.kind === 'lit') steps.push({ id: 'off', label: 'Switching the lights off' });
+  else if (describe) steps.push({ id: 'on', label: 'Switching the lights on' });
+  const t = new Tracker(steps.length ? steps : [{ id: 'none', label: 'Reading your picture' }], report);
+  const opts = { key: p.key, model: p.model, resolution: p.resolution, aspectRatio: aspect, signal: p.signal };
+  let base = photo;
+  if (p.recreate) base = (await t.run('base', () => generateImage({ ...opts, prompt: recreatePrompt(p.changes), refs: [photo] }), p.model, 'base')).blob;
+  else if (!steps.length) t.set('none', { status: 'done', preview: photo });
+  const [w, h] = await dims(base);
+  const id = `${Date.now().toString(36)}-${uid()}`;
+  const title = p.title?.trim() || (p.changes?.trim() ? titleFrom(p.changes) : 'From a photo');
+  const common = {
+    version: 1 as const, id, title, prompt: p.changes?.trim() ? `From a photo, with: ${p.changes.trim()}` : 'From a photo',
+    createdAt: new Date().toISOString(), model: p.model, resolution: p.resolution, width: w, height: h, method: 'split' as const,
+  };
+  if (!describe) {
+    const steps0 = p.recreate ? t.log : [{ label: 'Your photo', cost: 0, ms: 0, image: 'base' }];
+    const doc: SceneDoc = { ...common, lighting: p.lighting?.trim() || undefined, images: { base: 'base' }, steps: steps0, cost: t.cost, draft: { kind: p.kind === 'lit' ? 'dark' : p.kind, aspect }, markers: [] };
+    return { doc, images: { base } };
+  }
+  const images: Record<string, Blob> = {};
+  if (p.kind === 'lit') {
+    // the lights are already on in the picture: make the version with them off
+    images.on = base;
+    images.off = (await t.run('off', () => generateImage({ ...opts, prompt: lightsOffPrompt(p.lighting), refs: [base] }), p.model, 'off')).blob;
+  } else {
+    if (p.kind === 'ambient') {
+      images.ambient = base;
+      images.off = (await t.run('off', () => generateImage({ ...opts, prompt: DARK_VERSION_PROMPT, refs: [base] }), p.model, 'off')).blob;
+    } else images.off = base;
+    images.on = (await t.run('on', () => generateImage({ ...opts, prompt: lightFromTextPrompt(p.lighting || 'the lamps, windows and other light sources in the picture'), refs: [images.off] }), p.model, 'on')).blob;
+  }
+  const baseStep = p.recreate ? t.log.filter((x) => x.image === 'base').map((x) => ({ ...x, image: p.kind === 'ambient' ? 'ambient' : p.kind === 'lit' ? 'on' : 'off' })) : [];
+  const log = [...baseStep, ...t.log.filter((x) => x.image !== 'base')];
+  const doc: SceneDoc = {
+    ...common, lighting: p.lighting?.trim() || undefined,
+    images: Object.fromEntries(Object.keys(images).map((k) => [k, k])),
+    steps: log, cost: log.reduce((a, x) => a + x.cost, 0),
+  };
+  return { doc, images };
 }

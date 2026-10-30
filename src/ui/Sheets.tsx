@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { exportZip, loadBundle, type SceneEntry } from '../core/library';
+import { checkLuminal, relayUrl } from '../core/luminal';
 import { checkKey, MODELS, modelById, priceOf } from '../core/openrouter';
-import { bestForEdits, estimateCreate, gridCellCount } from '../core/pipeline';
-import { IDEAS, STYLES } from '../core/prompts';
-import type { GroupInfo, LightInfo } from '../core/types';
-import { importScene, openEntry, plateFor, reanalyze, removeLocal, runCreate, runGrid, runRefine, saveBlob, slug } from '../live';
+import { bestForEdits } from '../core/pipeline';
+import { IDEAS } from '../core/prompts';
+import { importScene, openEntry, reanalyze, removeLocal, runCreate, runCreateBase, runFromPhoto, runRefine, saveBlob, slug } from '../live';
 import { useStore } from '../state';
 import { Segmented, Slider, Toggle } from './controls';
+import { EFFECTS } from './Dock';
 import { Icon } from './icons';
-import { MODES } from './Console';
 import { tickSound } from './sound';
 import { methodLine, money } from './TopBar';
 
-function Sheet({ side = 'right', title, children, footer, onClose, wide }: { side?: 'left' | 'right'; title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean }) {
+export function Sheet({ side = 'right', title, children, footer, onClose, wide }: { side?: 'left' | 'right'; title: string; children: ReactNode; footer?: ReactNode; onClose: () => void; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -60,7 +60,7 @@ function Thumb({ entry }: { entry: SceneEntry }) {
 
 function SceneCard({ entry, current }: { entry: SceneEntry; current: boolean }) {
   const toast = useStore((s) => s.toast);
-  const kind = { split: 'Split', perLight: 'Per-light edits', layered: 'Moving layer', grid: 'Every frame' }[entry.method];
+  const kind = entry.doc.draft ? 'Draft · place the lights' : entry.doc.markers?.length ? 'Lights placed by hand' : { split: 'Split', perLight: 'Repainted lights', layered: 'Moving layer' }[entry.method];
   return (
     <li className={`scenecard${current ? ' is-current' : ''}`}>
       <button className="scenecard__open" onClick={() => { tickSound(); void openEntry(entry); }} aria-current={current}>
@@ -68,7 +68,7 @@ function SceneCard({ entry, current }: { entry: SceneEntry; current: boolean }) 
         <span className="scenecard__text">
           <span className="scenecard__kind">{kind}</span>
           <span className="scenecard__title">{entry.title}</span>
-          <span className="scenecard__line">{methodLine(entry.doc)}</span>
+          <span className="scenecard__line">{entry.doc.draft ? 'Only the picture so far. Open it to place the lights.' : methodLine(entry.doc, 0)}</span>
         </span>
       </button>
       {entry.source === 'local' && (
@@ -123,87 +123,199 @@ export function ScenesSheet({ onClose }: { onClose: () => void }) {
 
 // ---------------------------------------------------------------- create
 
+const ASPECTS = [
+  { value: '16:9', label: 'Wide' },
+  { value: '3:2', label: 'Photo' },
+  { value: '1:1', label: 'Square' },
+  { value: '9:16', label: 'Phone' },
+];
+
 export function CreateSheet({ onClose }: { onClose: () => void }) {
   const key = useStore((s) => s.key);
   const model = useStore((s) => s.model);
   const resolution = useStore((s) => s.resolution);
   const aspect = useStore((s) => s.aspect);
+  const luminalKey = useStore((s) => s.luminalKey);
+  const relay = useStore((s) => s.relay);
   const setSettings = useStore((s) => s.setSettings);
   const set = useStore((s) => s.set);
-  const [desc, setDesc] = useState('');
-  const [title, setTitle] = useState('');
-  const [style, setStyle] = useState(STYLES[0].id);
-  const [element, setElement] = useState('');
-  const m = modelById(model);
-  const res = m.resolutions.includes(resolution) ? resolution : m.resolutions[0];
-  const est = estimateCreate(model, res, !!element.trim());
-  const ok = desc.trim().length >= 8;
-  const go = () => {
-    if (!ok || !key) return;
-    void runCreate({ model, resolution: res, aspect, description: desc, styleId: style, element: element.trim() || undefined, title: title.trim() || undefined });
+  const [flow, setFlow] = useState<'one' | 'two' | 'photo'>('one');
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [recreate, setRecreate] = useState(true);
+  const [changes, setChanges] = useState('');
+  const [then, setThen] = useState<'picture' | 'describe' | 'place'>('place');
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => () => { if (photoUrl) URL.revokeObjectURL(photoUrl); }, [photoUrl]);
+  const takePhoto = (f: File | undefined | null) => {
+    if (!f || !f.type.startsWith('image/')) return;
+    if (photoUrl) URL.revokeObjectURL(photoUrl);
+    setPhoto(f);
+    setPhotoUrl(URL.createObjectURL(f));
   };
+  const [prompt, setPrompt] = useState('');
+  const [lighting, setLighting] = useState('');
+  const [element, setElement] = useState('');
+  const [title, setTitle] = useState('');
+  const [baseKind, setBaseKind] = useState<'dark' | 'ambient' | 'lit'>('dark');
+  const [more, setMore] = useState(false);
+  const m = modelById(model);
+  const res = m.resolutions.includes(resolution) ? resolution : m.resolutions.includes('1K') ? '1K' : m.resolutions[0];
+  const price = priceOf(model, res);
+  const kindNow = flow === 'photo' && then === 'describe' ? baseKind : baseKind === 'lit' ? 'dark' : baseKind;
+  const photoImages = (recreate ? 1 : 0) + (then === 'picture' ? 0 : kindNow === 'ambient' ? 2 : 1);
+  const n = flow === 'one' ? (element.trim() ? 4 : 2) : flow === 'two' ? (kindNow === 'ambient' ? 3 : 2) : photoImages;
+  const ready = flow === 'photo' ? !!photo && (then !== 'describe' || lighting.trim().length > 2) : prompt.trim().length > 3;
+  const go = () => {
+    if (!key) { set({ sheet: 'settings' }); return; }
+    if (!ready) return;
+    tickSound();
+    if (flow === 'one') void runCreate({ model, resolution: res, aspect, description: prompt, lighting, element: element.trim() || undefined, title: title.trim() || undefined });
+    else if (flow === 'two') void runCreateBase({ model, resolution: res, aspect, description: prompt, lighting, kind: kindNow === 'ambient' ? 'ambient' : 'dark', title: title.trim() || undefined });
+    else void runFromPhoto({ photo: photo!, recreate, changes, then, kind: kindNow, lighting, title: title.trim() || undefined });
+  };
+  const goLabel = !key ? 'Add your OpenRouter key' : flow === 'one' ? 'Make it' : flow === 'two' ? 'Make the picture' : then === 'describe' ? 'Light it up' : recreate ? 'Recreate it' : 'Use it';
   return (
-    <Sheet title="Paint a new night" onClose={onClose}
+    <Sheet title="New scene" onClose={onClose} wide
       footer={
         <div className="estimate">
-          <p><strong>{est.images} images</strong>, about {money(est.cost)} and {est.images > 2 ? '40' : '25'} seconds.</p>
-          {key ? (
-            <button className="btn btn--primary btn--big" disabled={!ok} onClick={go}><Icon name="spark" /><span>Paint it</span></button>
-          ) : (
-            <button className="btn btn--primary btn--big" onClick={() => set({ sheet: 'settings' })}><Icon name="key" /><span>Add your key</span></button>
-          )}
+          <p>{n ? <><strong>{n} image{n === 1 ? '' : 's'}</strong>, about {money(n * price)}{flow === 'two' || (flow === 'photo' && then === 'place') ? ' in total. You place the lights before the last.' : '.'}</> : <strong>No images to pay for.</strong>}</p>
+          <button className="btn btn--primary btn--big" onClick={go} disabled={!!key && !ready} data-testid="create-go">
+            <Icon name={key ? 'spark' : 'key'} /><span>{goLabel}</span>
+          </button>
         </div>
       }>
-      <label className="field">
-        <span className="field__label">Describe the place</span>
-        <textarea rows={5} value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="A quiet canal street in the rain, old houses with small windows, a lantern over a bridge…" onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) go(); }} />
-        <span className="field__hint">Name the lights you want to play with. The scene is painted at night with them switched on.</span>
-      </label>
-      <div className="ideas" aria-label="Ideas">
-        {IDEAS.map((i) => (
-          <button key={i.title} className="chip" onClick={() => { setDesc(i.prompt); setElement(i.element ?? ''); setTitle(i.name); tickSound(); }}>{i.title}</button>
-        ))}
-      </div>
-      <div className="field">
-        <span className="field__label">Style</span>
-        <Segmented label="Style" value={style} onChange={setStyle} options={STYLES.map((s) => ({ value: s.id, label: s.name }))} />
-      </div>
-      <label className="field">
-        <span className="field__label">Something that moves <em>optional</em></span>
-        <input value={element} onChange={(e) => setElement(e.target.value)} placeholder="the train" />
-        <span className="field__hint">One thing that should travel across the picture, seen from the side. It is cut out as its own layer, which takes 2 more images.</span>
-      </label>
-      <div className="field-row">
+      <Segmented label="How to make it" value={flow} onChange={(v) => { setFlow(v); tickSound(); }} options={[
+        { value: 'one', label: 'In one go', hint: 'Describe the picture and its lights; the app does the rest' },
+        { value: 'two', label: 'Picture, then lights', hint: 'See the picture, then click where the lights go' },
+        { value: 'photo', label: 'From a photo', hint: 'A photo, a drawing you made, a place you saw' },
+      ]} />
+      <p className="flowhelp">{flow === 'one'
+        ? 'The picture is made with its lights on, then again with them off. Every light in it becomes controllable.'
+        : flow === 'two' ? 'First just the picture. Then you click where the lights go, say what each one is, and the app lights exactly those.'
+          : 'Bring a photo, a scan of your artwork or a picture of a real place. The image model can recreate it first (exactly, or with changes), which edits more cleanly.'}</p>
+
+      {flow === 'photo' && (
         <div className="field">
-          <span className="field__label">Shape</span>
-          <Segmented label="Shape" value={aspect} onChange={(v) => setSettings({ aspect: v })} options={[
-            { value: '16:9', label: 'Wide' }, { value: '3:2', label: 'Photo' }, { value: '1:1', label: 'Square' }, { value: '9:16', label: 'Phone' },
+          <span className="field__label">Your picture</span>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => takePhoto(e.target.files?.[0])} data-testid="photo-input" />
+          <button
+            className={`dropzone${photoUrl ? ' has-photo' : ''}`}
+            onClick={() => fileRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); takePhoto(e.dataTransfer.files?.[0]); }}
+          >
+            {photoUrl ? <img src={photoUrl} alt="Your picture" /> : <span><Icon name="upload" /> Drop a photo here, or click to choose one</span>}
+          </button>
+          <Toggle on={recreate} onChange={setRecreate} label="Recreate it with the image model first (1 image)" />
+          {recreate && (
+            <textarea className="input" rows={2} value={changes} onChange={(e) => setChanges(e.target.value)} data-testid="photo-changes"
+              placeholder="Changes, if any: “make it a pen sketch”, “at night in the rain”, “as a watercolour”. Leave empty for an identical copy." />
+          )}
+          <span className="field__label">Then</span>
+          <Segmented label="What to make" value={then} onChange={setThen} options={[
+            { value: 'picture', label: 'Just the picture', hint: 'Keep it in Scenes; place its lights later' },
+            { value: 'place', label: 'Place the lights', hint: 'Click where the lights go' },
+            { value: 'describe', label: 'Describe the lights', hint: 'Say what glows; the app finds it' },
           ]} />
         </div>
-        <div className="field">
-          <span className="field__label">Detail</span>
-          <Segmented label="Detail" value={res} onChange={(v) => setSettings({ resolution: v })} options={m.resolutions.slice(0, 3).map((r) => ({ value: r, label: r, hint: `${money(priceOf(model, r))} per image` }))} />
+      )}
+
+      {flow !== 'photo' && <div className="field">
+        <label className="field__label" htmlFor="desc">The picture</label>
+        <textarea id="desc" className="input" rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} data-testid="create-prompt"
+          placeholder="Anything, in any style: a pen sketch with ruled perspective lines, a photo, pixel art, an oil painting… Describe what is in it." />
+        <div className="ideas">
+          {IDEAS.map((idea) => (
+            <button key={idea.title} className="chip" onClick={() => { setPrompt(idea.prompt); setLighting(idea.lighting); setElement(idea.element ?? ''); if (idea.element) setFlow('one'); tickSound(); }}>{idea.title}</button>
+          ))}
         </div>
-      </div>
-      <label className="field">
-        <span className="field__label">Title <em>optional</em></span>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Made from the description if left empty" />
-      </label>
+      </div>}
+
+      {(flow !== 'photo' || then === 'describe') && <div className="field">
+        <label className="field__label" htmlFor="lighting">The lights {flow === 'photo' ? '' : <em>optional</em>}</label>
+        <textarea id="lighting" className="input" rows={2} value={lighting} onChange={(e) => setLighting(e.target.value)} data-testid="create-lighting"
+          placeholder={flow === 'two' ? 'The overall feel of the light, e.g. “warm and soft” or “cold neon”. You place the lights next.' : 'What glows, and how: “the shop sign in pink neon, upstairs windows warm amber, a street lamp”'} />
+      </div>}
+
+      {(flow === 'two' || (flow === 'photo' && then !== 'picture')) && (
+        <div className="field">
+          <span className="field__label">{flow === 'photo' ? 'Your picture is' : 'The first picture is'}</span>
+          <div className={`choices${flow === 'photo' && then === 'describe' ? ' choices--3' : ''}`}>
+            {flow === 'photo' && then === 'describe' && (
+              <button className={`choice${kindNow === 'lit' ? ' is-on' : ''}`} onClick={() => setBaseKind('lit')} aria-pressed={kindNow === 'lit'}>
+                <strong>Its lights are on</strong>
+                <span>A night photo, a painting with glowing windows or stars. The version with them off is made (1 image).</span>
+              </button>
+            )}
+            <button className={`choice${kindNow === 'dark' ? ' is-on' : ''}`} onClick={() => setBaseKind('dark')} aria-pressed={kindNow === 'dark'}>
+              <strong>{flow === 'photo' ? 'Its lights are off' : 'The lights-off version'}</strong>
+              <span>{flow === 'photo' ? 'Your lights will shine in this very picture (1 image). Also right for drawings, where light can glow on the paper.' : 'Your lights will shine in this very picture. 2 images. Best for night scenes, and for drawings where light can glow on the paper.'}</span>
+            </button>
+            <button className={`choice${kindNow === 'ambient' ? ' is-on' : ''}`} onClick={() => setBaseKind('ambient')} aria-pressed={kindNow === 'ambient'}>
+              <strong>An everyday picture</strong>
+              <span>A darker version is made first, so the lights stand out; the original becomes a Daylight slider. {flow === 'photo' ? '2 images' : '3 images'}.</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button className="linkbtn" onClick={() => setMore(!more)} aria-expanded={more}>{more ? 'Fewer options' : 'More options'}</button>
+      {more && (
+        <div className="moreopts">
+          {flow === 'one' && (
+            <div className="field">
+              <label className="field__label" htmlFor="elem">Something that moves <em>optional</em></label>
+              <input id="elem" className="input" value={element} onChange={(e) => setElement(e.target.value)} placeholder="e.g. the train" />
+              <span className="field__hint">One thing that travels across the picture, seen from the side, looping forever as its own layer. 2 more images.</span>
+            </div>
+          )}
+          <div className="field field--row">
+            {flow !== 'photo' && (
+              <div>
+                <span className="field__label">Shape</span>
+                <Segmented label="Shape" value={aspect} onChange={(v) => setSettings({ aspect: v })} options={ASPECTS} />
+              </div>
+            )}
+            <div>
+              <span className="field__label">Detail</span>
+              <Segmented label="Detail" value={res} onChange={(v) => setSettings({ resolution: v })} options={m.resolutions.slice(0, 3).map((r) => ({ value: r, label: r === '768' ? 'Draft' : r === '1K' ? 'Normal' : 'Fine', hint: `${money(m.price[r])} per image` }))} />
+            </div>
+          </div>
+          <div className="field">
+            <label className="field__label" htmlFor="title">Title <em>optional</em></label>
+            <input id="title" className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Made from the description if left empty" />
+          </div>
+          {flow !== 'one' && (
+            <p className="field__hint">{luminalKey && relayUrl(relay) ? 'The director’s model will read the picture to work out exactly what each light you place is.' : 'With a Luminal key, the app also reads the picture to work out exactly what each light you place is. Without it, your notes go to the image model as written.'}</p>
+          )}
+        </div>
+      )}
     </Sheet>
   );
 }
 
 // ---------------------------------------------------------------- settings
 
+function useCheck() {
+  return useState<{ state: 'idle' | 'busy' | 'ok' | 'bad'; text?: string }>({ state: 'idle' });
+}
+
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const key = useStore((s) => s.key);
   const model = useStore((s) => s.model);
   const sound = useStore((s) => s.sound);
+  const theme = useStore((s) => s.theme);
   const spend = useStore((s) => s.spend);
+  const luminalKey = useStore((s) => s.luminalKey);
+  const relay = useStore((s) => s.relay);
   const setSettings = useStore((s) => s.setSettings);
   const [draft, setDraft] = useState(key);
+  const [lum, setLum] = useState(luminalKey);
+  const [rel, setRel] = useState(relay);
   const [show, setShow] = useState(false);
-  const [check, setCheck] = useState<{ state: 'idle' | 'busy' | 'ok' | 'bad'; text?: string }>({ state: 'idle' });
+  const [check, setCheck] = useCheck();
+  const [lcheck, setLcheck] = useCheck();
   const verify = async () => {
     const k = draft.trim();
     if (!k) return;
@@ -216,37 +328,75 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
       setCheck({ state: 'bad', text: (err as Error).message });
     }
   };
+  const verifyLum = async () => {
+    const k = lum.trim();
+    setSettings({ luminalKey: k, relay: rel.trim() });
+    if (!k) return;
+    if (!relayUrl(rel)) { setLcheck({ state: 'bad', text: 'Saved. Add a relay URL so the published site can reach Luminal (see below).' }); return; }
+    setLcheck({ state: 'busy' });
+    try {
+      const usd = await checkLuminal(k, rel);
+      setLcheck({ state: 'ok', text: `Luminal works. ${money(usd)} in the wallet.` });
+    } catch (err) {
+      setLcheck({ state: 'bad', text: (err as Error).message });
+    }
+  };
   return (
     <Sheet title="Settings" onClose={onClose}>
-      <div className="field">
-        <label className="field__label" htmlFor="orkey">OpenRouter key</label>
-        <div className="keyfield">
-          <input id="orkey" type={show ? 'text' : 'password'} value={draft} autoComplete="off" spellCheck={false} placeholder="sk-or-v1-…" onChange={(e) => { setDraft(e.target.value); setCheck({ state: 'idle' }); }} onKeyDown={(e) => e.key === 'Enter' && verify()} />
-          <button className="textbtn" onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
+      <section className="settings-group">
+        <h3>Images <span>OpenRouter</span></h3>
+        <div className="field">
+          <label className="field__label" htmlFor="orkey">OpenRouter key</label>
+          <div className="keyfield">
+            <input id="orkey" className="input" type={show ? 'text' : 'password'} value={draft} autoComplete="off" spellCheck={false} placeholder="sk-or-v1-…" onChange={(e) => { setDraft(e.target.value); setCheck({ state: 'idle' }); }} onKeyDown={(e) => e.key === 'Enter' && verify()} data-testid="or-key" />
+            <button className="textbtn" onClick={() => setShow(!show)}>{show ? 'Hide' : 'Show'}</button>
+          </div>
+          <div className="keyrow">
+            <button className="btn btn--small" onClick={verify} disabled={!draft.trim() || check.state === 'busy'} data-testid="or-save">{check.state === 'busy' ? 'Checking…' : 'Save and check'}</button>
+            {key && <button className="textbtn" onClick={() => { setSettings({ key: '' }); setDraft(''); setCheck({ state: 'idle' }); }}>Forget</button>}
+          </div>
+          {check.text && <p className={`notice notice--${check.state}`} role="status">{check.text}</p>}
+          <span className="field__hint">Kept only in this browser. Images are requested straight from OpenRouter.</span>
+        </div>
+        <div className="field">
+          <span className="field__label">Image model</span>
+          <div className="models" role="radiogroup" aria-label="Image model">
+            {MODELS.map((mm) => (
+              <button key={mm.id} role="radio" aria-checked={model === mm.id} className={`model${model === mm.id ? ' is-on' : ''}`} onClick={() => setSettings({ model: mm.id })}>
+                <span className="model__name">{mm.name}</span>
+                <span className="model__price">{money(mm.price[mm.resolutions.includes('1K') ? '1K' : mm.resolutions[0]])} per image</span>
+                <span className="model__note">{mm.note}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-group">
+        <h3>Director and picture reading <span>Luminal</span></h3>
+        <div className="field">
+          <label className="field__label" htmlFor="lumkey">Luminal key</label>
+          <input id="lumkey" className="input" type={show ? 'text' : 'password'} value={lum} autoComplete="off" spellCheck={false} placeholder="lum_live_…" onChange={(e) => { setLum(e.target.value); setLcheck({ state: 'idle' }); }} data-testid="lum-key" />
+        </div>
+        <div className="field">
+          <label className="field__label" htmlFor="relay">Relay URL {import.meta.env.DEV && <em>built in while developing</em>}</label>
+          <input id="relay" className="input" value={rel} spellCheck={false} placeholder={import.meta.env.DEV ? 'Not needed here (the dev server relays)' : 'https://your-relay.workers.dev'} onChange={(e) => { setRel(e.target.value); setLcheck({ state: 'idle' }); }} data-testid="lum-relay" />
+          <span className="field__hint">Luminal doesn’t take calls straight from a web page, so they pass through a tiny relay that adds the missing permission. Running the app yourself (<code>npm run dev</code> or <code>npm run serve</code>) needs nothing. For this published site, <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/cybercryptixcoder/living-stills/tree/main/relay" target="_blank" rel="noreferrer">deploy the relay to a free Cloudflare account</a> (one click, or paste <a href="https://github.com/cybercryptixcoder/living-stills/blob/main/relay/worker.js" target="_blank" rel="noreferrer">relay/worker.js</a> into a new Worker) and put its address here. Your key passes through it and is not stored.</span>
         </div>
         <div className="keyrow">
-          <button className="btn btn--small" onClick={verify} disabled={!draft.trim() || check.state === 'busy'}>{check.state === 'busy' ? 'Checking…' : 'Save and check'}</button>
-          {key && <button className="textbtn" onClick={() => { setSettings({ key: '' }); setDraft(''); setCheck({ state: 'idle' }); }}>Forget key</button>}
+          <button className="btn btn--small" onClick={verifyLum} disabled={lcheck.state === 'busy'} data-testid="lum-save">{lcheck.state === 'busy' ? 'Checking…' : 'Save and check'}</button>
         </div>
-        {check.text && <p className={`notice notice--${check.state}`} role="status">{check.text}</p>}
-        <span className="field__hint">Stored only in this browser. Images are requested straight from OpenRouter.</span>
-      </div>
-      <div className="field">
-        <span className="field__label">Image model</span>
-        <div className="models" role="radiogroup" aria-label="Image model">
-          {MODELS.map((m) => (
-            <button key={m.id} role="radio" aria-checked={model === m.id} className={`model${model === m.id ? ' is-on' : ''}`} onClick={() => setSettings({ model: m.id })}>
-              <span className="model__name">{m.name}</span>
-              <span className="model__price">{money(m.price[m.resolutions.includes('1K') ? '1K' : m.resolutions[0]])} per image</span>
-              <span className="model__note">{m.note}</span>
-            </button>
-          ))}
+        {lcheck.text && <p className={`notice notice--${lcheck.state}`} role="status">{lcheck.text}</p>}
+      </section>
+
+      <section className="settings-group">
+        <h3>This app</h3>
+        <div className="field field--row">
+          <Toggle on={sound} onChange={(v) => setSettings({ sound: v })} label="Switch sounds" />
+          <Segmented label="Theme" value={theme} onChange={(v) => setSettings({ theme: v })} options={[{ value: 'auto', label: 'Auto' }, { value: 'light', label: 'Paper' }, { value: 'dark', label: 'Ink' }]} />
         </div>
-      </div>
-      <div className="field">
-        <Toggle on={sound} onChange={(v) => setSettings({ sound: v })} label="Switch sounds" />
-      </div>
-      <p className="muted">Spent in this session: {money(spend)}.</p>
+        <p className="muted">Spent on images in this visit: {money(spend)}.</p>
+      </section>
     </Sheet>
   );
 }
@@ -260,24 +410,23 @@ export function RefineSheet({ onClose }: { onClose: () => void }) {
   const model = useStore((s) => s.model);
   const set = useStore((s) => s.set);
   useEffect(() => {
-    const before = useStore.getState().showLights;
-    set({ picking: true, showLights: true });
-    return () => set({ picking: false, showLights: before });
+    set({ picking: true });
+    return () => set({ picking: false });
   }, [set]);
   if (!analysis) return null;
   const brightest = (n: number) => bestForEdits(analysis.lights, analysis.width, analysis.height, analysis.waterline, n);
   const cost = picked.length * priceOf(model, '768');
   return (
-    <Sheet title="Real edits for chosen lights" onClose={() => { set({ picked: [] }); onClose(); }}
+    <Sheet title="Repaint chosen lights" onClose={() => { set({ picked: [] }); onClose(); }}
       footer={
         <div className="estimate">
           <p><strong>{picked.length} edit{picked.length === 1 ? '' : 's'}</strong>, about {money(cost)}.</p>
           <button className="btn btn--primary btn--big" disabled={!picked.length || !key} onClick={() => { const ids = picked; set({ picked: [] }); void runRefine(ids); }}>
-            <Icon name="spark" /><span>{key ? `Generate ${picked.length || ''} edit${picked.length === 1 ? '' : 's'}` : 'Add your key in Settings'}</span>
+            <Icon name="spark" /><span>{key ? `Repaint ${picked.length || ''} light${picked.length === 1 ? '' : 's'}` : 'Add your key in Settings'}</span>
           </button>
         </div>
       }>
-      <p className="lede">The split method estimates where each light falls. A real edit crops the picture around one light, asks the model to switch on just that light, and pastes the result back with soft edges. Precise, and one image per light.</p>
+      <p className="lede">From two images, the app estimates how far each light reaches. Where lights overlap that estimate can be off. Repainting crops the picture around one light, asks the model to switch on just that light, and pastes the result back with soft edges: exact, at one image per light.</p>
       <p className="muted">Click lights in the picture to choose them. Up to 12.</p>
       <div className="ideas">
         <button className="chip" onClick={() => set({ picked: brightest(3) })}>Brightest 3</button>
@@ -294,76 +443,6 @@ export function RefineSheet({ onClose }: { onClose: () => void }) {
     </Sheet>
   );
 }
-
-// ---------------------------------------------------------------- grid (every frame x every light)
-
-export function GridSheet({ onClose }: { onClose: () => void }) {
-  const scene = useStore((s) => s.scene);
-  const key = useStore((s) => s.key);
-  const model = useStore((s) => s.model);
-  const [plate, setPlate] = useState<{ lights: LightInfo[]; groups: GroupInfo[] } | null>(null);
-  const [frames, setFrames] = useState(4);
-  const [chosen, setChosen] = useState<number[]>([]);
-  const [withElement, setWithElement] = useState(true);
-  useEffect(() => {
-    void plateFor().then((p) => {
-      setPlate(p);
-      if (p) setChosen([...p.groups].sort((a, b) => b.lights.length - a.lights.length).slice(0, 2).map((g) => g.id));
-    });
-  }, []);
-  const plan = useMemo(() => ({ frames, groups: plate?.groups.filter((g) => chosen.includes(g.id)) ?? [], includeElement: withElement }), [frames, plate, chosen, withElement]);
-  const cells = gridCellCount(plan);
-  const cost = cells * priceOf(model, '768');
-  const rows = [...(withElement ? [capital(scene?.doc.motion?.element.replace(/^the /, '') ?? 'Moving')] : []), ...plan.groups.map((g) => `Lights ${g.name}`)];
-  return (
-    <Sheet title="Paint every frame" onClose={onClose} wide
-      footer={
-        <div className="estimate">
-          <p><strong>{cells} images</strong>, about {money(cost)}.</p>
-          <button className="btn btn--primary btn--big" disabled={!cells || !key || !plate} onClick={() => void runGrid(plan)}>
-            <Icon name="grid" /><span>{key ? `Generate ${cells} images` : 'Add your key in Settings'}</span>
-          </button>
-        </div>
-      }>
-      <p className="lede">The moving layer cuts {scene?.doc.motion?.element ?? 'the element'} out once and slides it. This is the brute-force way: put it at several positions and have the model paint every light again at every position. Light falls on it correctly at each stop, at the cost of frames × lights images.</p>
-      <div className="field">
-        <span className="field__label">Positions</span>
-        <Segmented label="Positions" value={String(frames)} onChange={(v) => setFrames(+v)} options={[2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: String(n) }))} />
-      </div>
-      <div className="field">
-        <span className="field__label">Lights to paint at each position</span>
-        <Toggle on={withElement} onChange={setWithElement} label={`${capital(scene?.doc.motion?.element ?? 'The element')}'s own lights`} />
-        {!plate && <p className="muted">Reading the lights…</p>}
-        <div className="groupchecks">
-          {plate?.groups.map((g) => (
-            <label key={g.id} className={`groupcheck${chosen.includes(g.id) ? ' is-on' : ''}`} onPointerEnter={() => useStore.getState().set({ hoverGroup: g.id })} onPointerLeave={() => useStore.getState().set({ hoverGroup: null })}>
-              <input type="checkbox" checked={chosen.includes(g.id)} onChange={(e) => setChosen(e.target.checked ? [...chosen, g.id] : chosen.filter((x) => x !== g.id))} />
-              <span>Group {g.name}</span><em>{g.lights.length} lights</em>
-            </label>
-          ))}
-        </div>
-      </div>
-      <div className="matrix" style={{ ['--cols' as string]: frames }} aria-label="Images that will be generated">
-        <span />
-        {Array.from({ length: frames }, (_, f) => <span key={f} className="matrix__col">{f + 1}</span>)}
-        {rows.map((r) => (
-          <MatrixRow key={r} label={r} frames={frames} />
-        ))}
-      </div>
-    </Sheet>
-  );
-}
-
-function MatrixRow({ label, frames }: { label: string; frames: number }) {
-  return (
-    <>
-      <span className="matrix__row">{label}</span>
-      {Array.from({ length: frames }, (_, f) => <span key={f} className="matrix__cell" />)}
-    </>
-  );
-}
-
-// ---------------------------------------------------------------- reflections and light detail
 
 export function ReflectionsSheet({ onClose }: { onClose: () => void }) {
   const scene = useStore((s) => s.scene);
@@ -419,34 +498,43 @@ export function ReflectionsSheet({ onClose }: { onClose: () => void }) {
 export function HelpSheet({ onClose }: { onClose: () => void }) {
   return (
     <Sheet title="How it works" onClose={onClose}>
-      <p className="lede">Light adds up. If you have the same picture with every light on and with every light off, the difference is the light itself, and any mix of lights is the dark picture plus some share of that difference.</p>
+      <p className="lede">Light adds up. With the same picture once with its lights on and once with them off, the difference is the light itself. Any mix of lights is the dark picture plus a share of that difference, worked out per light, every frame, on your graphics card.</p>
+      <h3 className="subhead">Using it</h3>
       <dl className="methods">
-        <dt>Split</dt>
-        <dd>Two images. The lit areas are found in the difference and every lamp and window becomes its own light. Glow between lights is shared by distance, and reflections follow the lights above them.</dd>
-        <dt>Per-light edits</dt>
-        <dd>One extra image per light. The model sees a crop centred on that light, plus the same crop lit as a reference, and switches on only that light. The way its light falls is painted, not estimated.</dd>
-        <dt>Moving layer</dt>
-        <dd>Two more images: the scene without the moving thing, lit and unlit. The difference cuts it out with its own glow, so it can loop forever.</dd>
-        <dt>Every frame</dt>
-        <dd>Frames × lights images. Every light painted again at every position. Expensive, kept to compare.</dd>
+        <dt>Click a light</dt>
+        <dd>Its panel opens: switch it, dim it, recolour it, give it a behaviour. Choose “Its group” to control every light around it at once. Shift-click or Shift-drag to pick several.</dd>
+        <dt>Effects</dt>
+        <dd>How the lights respond to you: a torch that follows the cursor, a brush, a path a light travels along, waves, music.</dd>
+        <dt>Presets</dt>
+        <dd>Ready-made light shows: dusk, dawn, a power cut, twinkling.</dd>
+        <dt>Director</dt>
+        <dd>Describe a sequence in words (“the windows flicker four times, then the sign sparks on”). An agent writes it as a show and plays it. Save the ones you like as presets.</dd>
+      </dl>
+      <h3 className="subhead">How many images a scene needs</h3>
+      <dl className="methods">
+        <dt>2 images</dt>
+        <dd>The usual case: lights on, lights off. Every light found in the difference is controllable; where two lights wash the same wall, their shares are estimated.</dd>
+        <dt>+1 per repainted light</dt>
+        <dd>Optional. The model repaints one light at a time so overlapping glows are exact.</dd>
+        <dt>+1 for an everyday picture</dt>
+        <dd>When you start from a daylight picture, a dark version is made so the lights stand out.</dd>
+        <dt>+2 for something moving</dt>
+        <dd>The scene without it, lit and unlit, so it can be cut out and loop.</dd>
       </dl>
       <h3 className="subhead">Keys</h3>
       <ul className="keys">
-        {MODES.map((m) => <li key={m.id}><kbd>{m.key}</kbd><span>{m.name}</span></li>)}
+        {EFFECTS.map((m) => <li key={m.id}><kbd>{m.key}</kbd><span>{m.name}</span></li>)}
+        <li><kbd>P</kbd><span>Presets</span></li>
+        <li><kbd>D</kbd><span>Director</span></li>
         <li><kbd>A</kbd><span>All lights on</span></li>
         <li><kbd>O</kbd><span>All lights off</span></li>
-        <li><kbd>L</kbd><span>Show lights</span></li>
         <li><kbd>Space</kbd><span>Play or pause motion</span></li>
-        <li><kbd>[</kbd><kbd>]</kbd><span>Smaller or larger radius</span></li>
+        <li><kbd>[</kbd><kbd>]</kbd><span>Smaller or larger torch</span></li>
         <li><kbd>H</kbd><span>Hide everything but the picture</span></li>
         <li><kbd>N</kbd><span>New scene</span></li>
         <li><kbd>S</kbd><span>Scenes</span></li>
+        <li><kbd>Esc</kbd><span>Close a panel</span></li>
       </ul>
     </Sheet>
   );
 }
-
-function capital(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-

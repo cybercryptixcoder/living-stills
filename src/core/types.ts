@@ -4,7 +4,7 @@ export type Vec3 = [number, number, number];
 export type Rect = [number, number, number, number]; // x, y, w, h (image pixels)
 
 /** How a scene's light layers were produced. */
-export type Method = 'split' | 'perLight' | 'layered' | 'grid';
+export type Method = 'split' | 'perLight' | 'layered';
 
 export interface StepLog {
   label: string;
@@ -30,26 +30,24 @@ export interface MotionSpec {
   speed: number; // image px per second at 1x
 }
 
-export interface GridGroupSpec {
-  id: number; // light id used in the grid scene (1..n)
-  name: string;
-  kind: 'static' | 'moving';
-  region?: Rect; // static groups: region the edit is allowed to light
-  lights?: number[]; // light ids from the plate analysis that formed this group
+/** A light the user placed by hand (two-stage scenes): it becomes one controllable light group. */
+export interface Marker {
+  n: number; // 1, 2, 3 ... as shown on the picture
+  x: number; // image px
+  y: number;
+  note: string; // what the user wrote ("only the rubber of the front tyre")
+  color?: string; // #rrggbb the user asked for
+  /** Filled in by the lighting planner (vision model): what is at the marker and where it ends. */
+  object?: string;
+  box?: [number, number, number, number]; // x0, y0, x1, y1 image px
 }
 
-export interface GridCell {
-  f: number;
-  g: number; // group id
-  crop: Rect;
-  image: string;
-}
-
-export interface GridSpec {
-  frames: number;
-  offsets: number[]; // element x offset per frame (px)
-  groups: GridGroupSpec[];
-  cells: GridCell[];
+/** What the vision model saw: names for zones of lights, used by the director and the inspector. */
+export interface SceneLabels {
+  summary: string;
+  zones: Record<string, string>; // zone number -> "paper lanterns above the door"
+  /** fingerprint of the zones these labels were made for */
+  key: string;
 }
 
 export interface AnalysisParams {
@@ -59,6 +57,8 @@ export interface AnalysisParams {
   coreStrictness: number;
   /** Max number of lights. */
   maxLights: number;
+  /** Lights may also darken or recolour (a glow on white paper): keep negative change. Auto when unset. */
+  signed?: boolean;
 }
 
 export const DEFAULT_ANALYSIS: AnalysisParams = { cleanup: 1, coreStrictness: 1, maxLights: 240 };
@@ -68,6 +68,14 @@ export interface SceneDoc {
   id: string;
   title: string;
   prompt: string;
+  /** How the user asked for the lighting to look (free text). */
+  lighting?: string;
+  /** Two-stage scenes: the lights the user placed. */
+  markers?: Marker[];
+  /** Vision labels for the director (optional). */
+  labels?: SceneLabels;
+  /** Set while a two-stage scene waits for its lights to be placed (only the picture exists). */
+  draft?: { kind: 'dark' | 'ambient'; aspect: string };
   style?: string;
   createdAt: string;
   model: string;
@@ -81,7 +89,6 @@ export interface SceneDoc {
   analysis?: Partial<AnalysisParams>;
   refinements?: Refinement[];
   motion?: MotionSpec;
-  grid?: GridSpec;
   steps: StepLog[];
   cost: number;
   demo?: {
@@ -104,8 +111,8 @@ export interface LightInfo {
   color: Vec3; // original light chromaticity (max channel = 1)
   group: number;
   refined?: boolean;
-  /** Per-frame centroid for grid scenes where a light moves. */
-  framePos?: [number, number][];
+  /** Two-stage scenes: the marker number this light belongs to (0 = found but not placed). */
+  marker?: number;
 }
 
 export interface GroupInfo {
@@ -139,7 +146,7 @@ export interface SpriteData {
 export interface AnalysisResult {
   width: number;
   height: number;
-  layers: LayerData[]; // frames (grid) or variants (perLight: [estimate, edits])
+  layers: LayerData[]; // variants (perLight: [estimate, edits])
   lights: LightInfo[];
   groups: GroupInfo[];
   sprite?: SpriteData;
@@ -151,8 +158,10 @@ export interface AnalysisResult {
     cores: number;
     ms: number;
   };
-  /** Grid only: which frame layer each frame index uses. */
-  frameOffsets?: number[];
+  /** Light may darken as well as brighten (signed difference). */
+  signed?: boolean;
+  /** Daylight version (sRGB RGBA), when the scene has one. */
+  ambient?: Uint8ClampedArray;
   /** Per-light edit scenes: layer index of the edited variant. */
   editedLayer?: number;
 }

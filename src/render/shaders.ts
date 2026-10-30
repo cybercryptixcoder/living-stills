@@ -27,6 +27,8 @@ uniform int uLayerA;
 uniform int uLayerB;
 uniform float uMix;
 uniform float uAmbient;
+uniform sampler2D uDayTex; // the daylight version (only when the scene has one)
+uniform float uDay;
 
 uniform int uHasSprite;
 uniform sampler2D uSpLit;
@@ -63,9 +65,12 @@ vec3 gainSmooth(vec2 uv, int layer) {
 
 void layerColor(int layer, out vec3 col, out vec3 light) {
   vec3 base = texture(uBase, vec3(vUv, float(layer))).rgb;
+  if (uDay > 0.001) base = mix(base, texture(uDayTex, vUv).rgb, uDay);
   vec3 D = texture(uDelta, vec3(vUv, float(layer))).rgb;
   light = D * gainSmooth(vUv, layer);
-  col = uAmbient * base + light;
+  // light can be signed (a glow drawn on white paper tints it): never below black
+  col = max(uAmbient * base + light, 0.0);
+  light = max(light, 0.0);
 }
 
 void main() {

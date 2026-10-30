@@ -1,4 +1,4 @@
-import { downloadScene, runRepaintOff } from '../live';
+import type { SceneDoc } from '../core/types';
 import { useStore } from '../state';
 import { Icon } from './icons';
 import { tickSound } from './sound';
@@ -9,18 +9,19 @@ export function money(usd: number) {
   return `${c < 10 ? c.toFixed(1) : Math.round(c)}¢`;
 }
 
-export function methodLine(doc: { method: string; cost: number; steps: { image?: string }[]; refinements?: unknown[]; grid?: { frames: number }; motion?: { element: string } }, lights?: number) {
-  const n = doc.steps.filter((s) => s.image).length;
-  const made = `Made from ${n} image${n === 1 ? '' : 's'} for ${money(doc.cost)}.`;
+export function methodLine(doc: SceneDoc, lights: number): string {
+  const images = doc.steps.filter((s) => s.image).length || Object.keys(doc.images).length;
+  const made = `${images} image${images === 1 ? '' : 's'}, ${money(doc.cost)}.`;
+  const found = lights ? `${lights} light${lights === 1 ? '' : 's'}` : 'Lights';
   switch (doc.method) {
     case 'split':
-      return `${made} ${lights ? `${lights} lights found` : 'Lights found'} by comparing a lit and an unlit version.`;
+      return doc.markers?.length
+        ? `${made} ${doc.markers.length} light${doc.markers.length === 1 ? '' : 's'} placed by hand, ${found.toLowerCase()} found in them.`
+        : `${made} ${found} found by comparing a lit and an unlit version.`;
     case 'perLight':
-      return `${made} ${doc.refinements?.length ?? 0} lights have their own generated edit; the rest are split from the pair.`;
+      return `${made} ${doc.refinements?.length ?? 0} lights repainted one by one; the rest split from the pair.`;
     case 'layered':
-      return `${made} ${capital(doc.motion?.element ?? 'The element')} is cut out once and travels as its own layer.`;
-    case 'grid':
-      return `${made} Each light was painted again at ${doc.grid?.frames === 2 ? 'both' : `all ${doc.grid?.frames ?? 0}`} positions of the ${(doc.motion?.element ?? 'element').replace(/^the /, '')}.`;
+      return `${made} ${capital(doc.motion?.element ?? 'The moving element')} is cut out once and loops as its own layer.`;
     default:
       return made;
   }
@@ -30,89 +31,38 @@ function capital(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-const THEME_NEXT: Record<string, 'auto' | 'light' | 'dark'> = { auto: 'light', light: 'dark', dark: 'auto' };
-const THEME_WORD: Record<string, string> = { auto: 'Auto theme', light: 'Paper theme', dark: 'Night theme' };
-
 export function TopBar() {
   const scene = useStore((s) => s.scene);
   const key = useStore((s) => s.key);
+  const luminalKey = useStore((s) => s.luminalKey);
   const cinema = useStore((s) => s.cinema);
   const spend = useStore((s) => s.spend);
-  const theme = useStore((s) => s.theme);
   const set = useStore((s) => s.set);
-  const setSettings = useStore((s) => s.setSettings);
-  const open = (sheet: 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help' | 'reflections') => { set({ sheet }); tickSound(); };
+  const open = (sheet: 'scenes' | 'create' | 'settings' | 'help') => { set({ sheet, menu: null }); tickSound(); };
   return (
     <header className={`topbar${cinema ? ' is-hidden' : ''}`}>
-      <div className="mast">
-        <h1 className="wordmark">Living Stills<span className="stop">.</span></h1>
-        <span className="mast__note">a lighting console for paintings</span>
-        <span className="spacer" />
-        {spend > 0 && <span className="pill pill--quiet" title="Spent on image generation in this session">{money(spend)} spent</span>}
-        <button
-          className="iconbtn"
-          onClick={() => { setSettings({ theme: THEME_NEXT[theme] }); tickSound(); }}
-          title={`${THEME_WORD[theme]} — click for ${THEME_WORD[THEME_NEXT[theme]].toLowerCase()}`}
-          aria-label={`Theme: ${THEME_WORD[theme]}. Change theme`}
-        >
-          <Icon name={theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'heat'} />
-        </button>
-        <button className="btn btn--quiet" onClick={() => open('help')} aria-label="Help and shortcuts" title="Help and shortcuts (?)">
-          <Icon name="help" /><span>Help</span>
-        </button>
-        <button className="btn btn--quiet" onClick={() => open('scenes')} title="Scenes (S)">
-          <Icon name="scenes" /><span>Scenes</span>
-        </button>
-        <button className="btn" onClick={() => open('create')} title="Paint a new scene (N)">
-          <Icon name="plus" /><span>New scene</span>
-        </button>
-        <button
-          className={`iconbtn iconbtn--key${key ? ' has-key' : ''}`}
-          onClick={() => open('settings')}
-          title={key ? 'Settings. Your OpenRouter key is set.' : 'Settings. Add your OpenRouter key to paint new scenes.'}
-          aria-label="Settings"
-        >
-          <Icon name="key" /><span className="keydot" aria-hidden="true" />
-        </button>
-      </div>
-
-      <div className="titleblock">
-        <div className="titleblock__text">
-          <h2 className="scene-title">{scene ? scene.doc.title : 'Living Stills'}</h2>
-          <p className="scene-line">
-            {scene ? methodLine(scene.doc, scene.lights) : 'Choose a scene, or paint a new one.'}
-          </p>
+      <div className="topbar__brand">
+        <h1 className="wordmark">Living Stills<span className="wordmark__dot">.</span></h1>
+        <div className="topbar__scene">
+          <h2 className="scene-title">{scene ? scene.doc.title : 'Choose a scene'}</h2>
+          <p className="scene-line">{scene ? methodLine(scene.doc, scene.lights) : 'Or make a new one from a description.'}</p>
         </div>
-        {scene && (
-          <nav className="scene-actions" aria-label="This scene">
-            {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
-              <button onClick={() => open('refine')}>Real edits for chosen lights</button>
-            )}
-            {(scene.doc.method === 'layered' || scene.doc.method === 'grid') && (
-              <button onClick={() => open('grid')}>Paint every frame</button>
-            )}
-            {scene.doc.method !== 'grid' && <button onClick={() => open('reflections')}>Lights and reflections</button>}
-            <button onClick={() => void downloadScene()}>Download scene</button>
-            {(scene.doc.method === 'split' || scene.doc.method === 'perLight') && (
-              <details className="moreactions">
-                <summary>More</summary>
-                <div className="moreactions__menu">
-                  <button
-                    onClick={() => {
-                      const n = scene.doc.refinements?.length ?? 0;
-                      const msg = `Ask the model for a new lights-off version (one image, about 1¢). Use this if lamps vanished instead of going dark.${n ? ` The ${n} per-light edits were made against the old one and will be dropped.` : ''}`;
-                      if (useStore.getState().key && confirm(msg)) void runRepaintOff();
-                      else if (!useStore.getState().key) set({ sheet: 'settings' });
-                    }}
-                  >
-                    Repaint the dark version
-                  </button>
-                </div>
-              </details>
-            )}
-          </nav>
-        )}
       </div>
+      <nav className="topbar__actions" aria-label="App">
+        {spend > 0 && <span className="spendtag" title="Spent on images in this visit">{money(spend)}</span>}
+        <button className="pill pill--ghost" onClick={() => open('help')} aria-label="How it works"><Icon name="help" /><span className="pill__label">Help</span></button>
+        <button className="pill pill--ghost" onClick={() => open('scenes')} data-testid="open-scenes"><Icon name="scenes" /><span className="pill__label">Scenes</span></button>
+        <button className="pill pill--ink" onClick={() => open('create')} data-testid="open-create"><Icon name="plus" /><span className="pill__label">New scene</span></button>
+        <button
+          className={`keybtn${key ? ' is-set' : ''}${key && luminalKey ? ' is-full' : ''}`}
+          onClick={() => open('settings')}
+          title={key ? 'Settings and keys' : 'Settings: add your OpenRouter key to make new scenes'}
+          aria-label="Settings and keys"
+          data-testid="open-settings"
+        >
+          <Icon name="key" />
+        </button>
+      </nav>
     </header>
   );
 }

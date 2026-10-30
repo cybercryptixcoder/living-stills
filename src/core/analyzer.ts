@@ -1,6 +1,6 @@
 // Main-thread handle on the analysis worker.
 
-import type { AnalysisResult, LightInfo, GroupInfo, Rect, SceneDoc } from './types';
+import type { AnalysisResult, Rect, SceneDoc } from './types';
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -48,14 +48,11 @@ class Analyzer {
   analyze(doc: SceneDoc, images: Record<string, Blob>, token: string) {
     return this.call<AnalysisResult>({ type: 'analyze', doc: this.scoped(doc, token) }, images, token);
   }
-  crop(doc: SceneDoc, images: Record<string, Blob>, token: string, src: { kind: 'image'; key: string } | { kind: 'gridFrame'; dx: number; litElement?: boolean }, crop: Rect, outW?: number) {
+  crop(doc: SceneDoc, images: Record<string, Blob>, token: string, src: { kind: 'image'; key: string }, crop: Rect, outW?: number) {
     return this.call<Blob>({ type: 'crop', doc: this.scoped(doc, token), src, crop, outW }, images, token);
   }
   detectElement(doc: SceneDoc, images: Record<string, Blob>, token: string) {
     return this.call<Rect | null>({ type: 'detectElement', doc: this.scoped(doc, token) }, images, token);
-  }
-  plate(doc: SceneDoc, images: Record<string, Blob>, token: string) {
-    return this.call<{ lights: LightInfo[]; groups: GroupInfo[]; waterline: number | null; sprite?: { rect: Rect; spillRect: Rect } }>({ type: 'plate', doc: this.scoped(doc, token) }, images, token);
   }
 }
 

@@ -4,10 +4,17 @@ import { analyzer } from './core/analyzer';
 import { deleteLocal, exportZip, importZip, listExamples, listLocal, loadBundle, saveLocal, type SceneEntry } from './core/library';
 import { modelById } from './core/openrouter';
 import {
-  aspectString, buildGrid, createScene, refineLights, repaintOff, type Bundle, type CreateParams, type GridPlan, type JobStep,
+  aspectString, createBase, createScene, fromPhoto, lightUp, refineLights, repaintOff,
+  type BaseParams, type Bundle, type CreateParams, type JobStep, type PhotoParams,
 } from './core/pipeline';
-import type { AnalysisResult, GroupInfo, LightInfo } from './core/types';
-import { Engine, makeRoute, type ModeId } from './play/engine';
+import { direct, labelZones, planFromNotes, planMarkers, type DirectorScene, type MarkerPlan } from './core/agents';
+import { relayUrl } from './core/luminal';
+import type { AnalysisResult, Marker } from './core/types';
+import { audio } from './play/audio';
+import { Engine, makeRoute, type LightFx, type ModeId } from './play/engine';
+import { BUILT_IN, type Preset } from './play/presets';
+import { usesMusic, type Show } from './play/show';
+import { computeZones, zonesFromGroups, zonesKey, type Zone } from './play/zones';
 import type { Renderer } from './render/Renderer';
 import { DEFAULT_VIEW, useStore, type SceneState } from './state';
 
@@ -17,9 +24,9 @@ export const live = {
   bundle: null as (Bundle & { source: 'example' | 'local' }) | null,
   token: '',
   motionDx: 0,
-  gridPhase: 0,
-  plate: null as { lights: LightInfo[]; groups: GroupInfo[] } | null,
   abort: null as AbortController | null,
+  /** the two-stage draft open in the studio */
+  draft: null as (Bundle & { source: 'local' }) | null,
 };
 
 (window as unknown as { __living: typeof live & { store: typeof useStore } }).__living = Object.assign(live, { store: useStore });
@@ -38,58 +45,102 @@ function sceneState(b: Bundle & { source: 'example' | 'local' }, a: AnalysisResu
     doc,
     source: b.source,
     lights: a.lights.length,
-    groups: a.groups.map((g) => ({ name: g.name, count: g.lights.length, kind: g.kind })),
     hasElement: !!a.sprite,
     elementName: doc.motion?.element,
-    frames: a.layers.length,
     editedLayer: a.editedLayer,
     waterline: a.waterline,
+    signed: !!a.signed,
+    hasDaylight: !!a.ambient,
   };
 }
 
 export async function openBundle(b: Bundle & { source: 'example' | 'local' }, keepUi = false) {
   const set = S().set;
-  set({ status: 'loading', statusText: 'Finding the lights', selected: null, hovered: null, picking: false, picked: [] });
+  if (b.doc.draft) { openStudio(b as Bundle & { source: 'local' }); return; }
+  set({ status: 'loading', statusText: 'Finding the lights', selection: null, hovered: null, picking: false, picked: [] });
   const token = `${b.doc.id}@${b.doc.steps.length}@${Object.keys(b.doc.images).length}`;
   const a = await analyzer().analyze(b.doc, b.images, token);
   live.bundle = b;
   live.token = token;
-  live.plate = null;
+
   const r = live.renderer;
   if (!r) throw new Error('The renderer is not ready.');
-  r.load({ w: a.width, h: a.height, layers: a.layers, sprite: a.sprite });
+  r.load({ w: a.width, h: a.height, layers: a.layers, sprite: a.sprite, ambient: a.ambient });
   const sp = a.sprite;
   const element = sp
     ? { x: sp.rect[0] + sp.rect[2] / 2, y: sp.rect[1] + sp.rect[3] / 2, flux: Math.max(1, sp.flux), color: sp.color }
     : null;
   const e = live.engine;
-  e.load(a.lights, a.groups.length, a.width, a.height, element);
+  // zones: the user's own groups in two-stage scenes, nearby clusters otherwise
+  const zones = b.doc.markers?.length ? zonesFromGroups(a.groups, a.lights, a.width, a.height) : computeZones(a.lights, a.width, a.height);
+  a.lights.forEach((L) => { L.group = 0; });
+  zones.forEach((z, j) => z.lights.forEach((i) => { a.lights[i].group = j; }));
+  e.load(a.lights, zones.length, a.width, a.height, element);
+  zones.forEach((z, j) => z.lights.forEach((i) => { e.zoneOf[i] = j; }));
+  e.zoneCount = zones.length;
   e.route = b.doc.demo?.route ? makeRoute(b.doc.demo.route) : null;
   e.wake();
   live.motionDx = 0;
-  live.gridPhase = 0;
-  const startMode = (b.doc.demo?.startMode as ModeId) || 'hand';
+  const startMode = b.doc.demo?.startMode || 'hand';
   const ui = keepUi
     ? {}
     : {
         view: { ...DEFAULT_VIEW, ...(b.doc.demo?.view ?? {}) },
-        mode: startMode,
+        mode: (startMode === 'dusk' ? 'hand' : startMode) as ModeId,
         variant: (a.editedLayer != null ? 'edits' : 'estimate') as 'edits' | 'estimate',
         motion: { ...S().motion, playing: true },
+        playing: null,
       };
+  const key = zonesKey(zones, a.width);
+  const labels = b.doc.labels?.key === key ? b.doc.labels : null;
   set({
     analysis: a,
     scene: sceneState(b, a),
+    zones: applyLabels(zones, labels),
+    labels,
     currentId: b.doc.id,
     status: 'ready',
     statusText: '',
-    groups: a.groups.map(() => 1),
     master: 1,
-    elementFader: 1,
     routeReady: !!e.route,
     ...ui,
   });
+  if (!keepUi && startMode === 'dusk') playPreset(BUILT_IN.find((p) => p.id === 'dusk')!);
   try { localStorage.setItem('living-stills:last', b.doc.id); } catch { /* ignore */ }
+  if (!labels) void ensureLabels();
+}
+
+function applyLabels(zones: Zone[], labels: { zones: Record<string, string> } | null): Zone[] {
+  if (!labels) return zones;
+  const named = zones.map((z) => ({ ...z, name: capital(labels.zones[String(z.n)] ?? z.name) }));
+  // several zones with the same name ("string lights" ×6): tell them apart by where they are
+  const groups = new Map<string, Zone[]>();
+  named.forEach((z) => groups.set(z.name, [...(groups.get(z.name) ?? []), z]));
+  for (const [, same] of groups) {
+    if (same.length < 2) continue;
+    const byX = [...same].sort((a, b) => a.x - b.x);
+    const words = same.length === 2 ? ['left', 'right'] : same.length === 3 ? ['left', 'middle', 'right'] : null;
+    byX.forEach((z, k) => { z.name = `${z.name}, ${words ? words[k] : `${k + 1} of ${same.length}`}`; });
+  }
+  return named;
+}
+
+/** Names the zones with the vision model, once per scene (kept with your own scenes). */
+export async function ensureLabels(force = false) {
+  const st = S(), b = live.bundle, a = st.analysis;
+  if (!b || !a || !st.zones.length || b.doc.markers?.length) return;
+  if (!st.luminalKey || !relayUrl(st.relay)) return;
+  if (st.labels && !force) return;
+  const key = zonesKey(st.zones, a.width);
+  try {
+    const labels = await labelZones(b.images.on, st.zones, a.width, key, { key: st.luminalKey, relay: st.relay });
+    if (live.bundle !== b) return;
+    b.doc = { ...b.doc, labels };
+    if (b.source === 'local') await saveLocal(b);
+    S().set({ labels, zones: applyLabels(S().zones, labels) });
+  } catch (err) {
+    console.warn('labels', (err as Error).message);
+  }
 }
 
 export async function openEntry(entry: SceneEntry): Promise<void> {
@@ -143,7 +194,7 @@ export function cancelJob() {
 
 export async function runCreate(p: Omit<CreateParams, 'key' | 'signal'>) {
   const { key } = S();
-  const { report, signal } = startJob('Painting a new night');
+  const { report, signal } = startJob('Making a new scene');
   try {
     const b = await createScene({ ...p, key, signal }, report);
     await finishJob(b);
@@ -180,33 +231,6 @@ export async function runRepaintOff() {
   try {
     const nb = await repaintOff(b, { key, model, signal }, report);
     if (b.source === 'example') nb.doc = { ...nb.doc, id: `${b.doc.id}-mine-${Date.now().toString(36)}`, title: `${b.doc.title}, repainted`, demo: undefined };
-    await finishJob(nb);
-  } catch (err) {
-    failJob(err);
-  }
-}
-
-export async function plateFor(): Promise<{ lights: LightInfo[]; groups: GroupInfo[] } | null> {
-  const b = live.bundle;
-  if (!b || !b.doc.motion) return null;
-  if (live.plate) return live.plate;
-  const doc = b.doc.method === 'grid' ? { ...b.doc, method: 'layered' as const } : b.doc;
-  const r = await analyzer().plate(doc, b.images, live.token);
-  live.plate = { lights: r.lights, groups: r.groups };
-  return live.plate;
-}
-
-export async function runGrid(plan: GridPlan) {
-  const b = live.bundle;
-  if (!b?.doc.motion) return;
-  const plate = await plateFor();
-  if (!plate) return;
-  const { key, model } = S();
-  const { report, signal } = startJob('Painting every frame');
-  try {
-    const aspect = aspectString(b.doc.width, b.doc.height, modelById(model));
-    const base = b.doc.method === 'grid' ? { ...b, doc: { ...b.doc, method: 'layered' as const } } : b;
-    const nb = await buildGrid(base, live.token, plan, plate.lights, { key, model, aspect, signal }, report);
     await finishJob(nb);
   } catch (err) {
     failJob(err);
@@ -281,3 +305,204 @@ export async function exportForExamples(): Promise<{ doc: unknown; files: Record
 (window as unknown as { __exportScene: typeof exportForExamples }).__exportScene = exportForExamples;
 
 Object.assign(live, { openEntryForTests: openEntry });
+
+function capital(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ---------------------------------------------------------------- two stages
+
+export async function runCreateBase(p: Omit<BaseParams, 'key' | 'signal'>) {
+  const { key } = S();
+  const { report, signal } = startJob('Making the picture');
+  try {
+    const b = await createBase({ ...p, key, signal }, report);
+    await saveLocal(b);
+    await refreshLibrary();
+    S().set({ job: null });
+    openStudio({ ...b, source: 'local' });
+  } catch (err) {
+    failJob(err);
+  }
+}
+
+export async function runFromPhoto(p: Omit<PhotoParams, 'key' | 'signal' | 'model' | 'resolution'>) {
+  const { key, model, resolution } = S();
+  const { report, signal } = startJob(p.then === 'describe' ? 'Lighting your picture' : 'Bringing in your picture');
+  try {
+    const b = await fromPhoto({ ...p, key, model, resolution, signal }, report);
+    if (b.doc.draft) {
+      await saveLocal(b);
+      await refreshLibrary();
+      S().set({ job: null });
+      if (p.then === 'place') openStudio({ ...b, source: 'local' });
+      else S().toast('Saved in Scenes. Open it any time to place its lights.');
+    } else await finishJob(b);
+  } catch (err) {
+    failJob(err);
+  }
+}
+
+export function openStudio(b: Bundle & { source: 'local' }) {
+  live.draft = b;
+  S().set({ sheet: 'studio', status: S().scene ? 'ready' : 'idle' });
+}
+
+export async function saveDraftMarkers(markers: Marker[], lighting: string) {
+  const d = live.draft;
+  if (!d) return;
+  d.doc = { ...d.doc, markers, lighting };
+  await saveLocal(d);
+}
+
+/** Stage two: the planner reads the picture, then the image model switches the placed lights on. */
+export async function runLightUp(markers: Marker[], lighting: string) {
+  const d = live.draft;
+  if (!d) return;
+  const st = S();
+  const { report, signal } = startJob('Lighting your picture');
+  const w = d.doc.width, h = d.doc.height;
+  let plan: MarkerPlan[];
+  const planStep: JobStep = { id: 'plan', label: 'Reading the picture', status: 'running' };
+  const canPlan = !!st.luminalKey && !!relayUrl(st.relay);
+  try {
+    if (canPlan) {
+      report([planStep]);
+      const t0 = performance.now();
+      try {
+        plan = await planMarkers(d.images.base, markers, w, h, d.doc.prompt, lighting, { key: st.luminalKey, relay: st.relay, signal });
+        planStep.status = 'done';
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') throw err;
+        plan = planFromNotes(markers, w, h);
+        planStep.status = 'done';
+        planStep.error = `Used your notes as written (${(err as Error).message})`;
+      }
+      planStep.ms = performance.now() - t0;
+    } else plan = planFromNotes(markers, w, h);
+    const planned = markers.map((m) => {
+      const p = plan.find((x) => x.n === m.n);
+      return { ...m, object: p?.object, box: p?.box };
+    });
+    const nb = await lightUp(d, { key: st.key, model: st.model, markers: planned, lighting, plan, signal }, (steps) => report(canPlan ? [planStep, ...steps] : steps));
+    await deleteLocal(d.doc.id);
+    live.draft = null;
+    await finishJob(nb);
+  } catch (err) {
+    failJob(err);
+  }
+}
+
+// ---------------------------------------------------------------- selection and the light panel
+
+/** The engine indices the light panel controls right now. */
+export function selectedIndices(): number[] {
+  const sel = S().selection;
+  if (!sel) return [];
+  if (sel.scope === 'picked') return sel.picked;
+  if (sel.scope === 'zone') {
+    const z = live.engine.zoneOf[sel.anchor];
+    const zone = S().zones[z];
+    return zone ? zone.lights : [sel.anchor];
+  }
+  return [sel.anchor];
+}
+
+function leaveShow() {
+  const e = live.engine;
+  if (e.mode === 'show') {
+    e.stopShow();
+    S().set({ mode: 'hand', playing: null });
+  }
+}
+
+export function setLevel(ix: number[], v: number) {
+  leaveShow();
+  for (const i of ix) live.engine.base[i] = v;
+  S().set({ rev: S().rev + 1 });
+}
+
+export function setColor(ix: number[], c: [number, number, number] | null) {
+  leaveShow();
+  for (const i of ix) live.engine.colors[i] = c;
+  S().set({ rev: S().rev + 1 });
+}
+
+export function setFx(ix: number[], fx: LightFx) {
+  live.engine.setFx(ix, fx);
+  if (fx === 'music' && !audio.active) S().toast('Turn on Listen in the Music effect (or the light panel) so the light can hear.');
+  S().set({ rev: S().rev + 1 });
+}
+
+// ---------------------------------------------------------------- shows: presets and the director
+
+export function playShow(show: Show, id?: string) {
+  const e = live.engine;
+  e.playShow(show);
+  S().set({ mode: 'show', playing: { name: show.name, id, loop: !!show.loop }, menu: null });
+  if (usesMusic(show) && !audio.active) S().toast('This show follows music. Turn on Listen to hear it.');
+}
+
+export function playPreset(p: Preset) {
+  playShow(p.show, p.id);
+}
+
+export function stopShow() {
+  live.engine.stopShow();
+  S().set({ mode: 'hand', playing: null });
+}
+
+export function directorScene(): DirectorScene {
+  const st = S(), a = st.analysis!, e = live.engine;
+  return {
+    summary: st.labels?.summary || st.scene?.doc.prompt || '',
+    zones: st.zones.map((z) => ({
+      n: z.n, name: z.name,
+      x: z.bbox[0] / a.width, y: z.bbox[1] / a.height, w: (z.bbox[2] - z.bbox[0]) / a.width, h: (z.bbox[3] - z.bbox[1]) / a.height,
+      count: z.lights.length,
+      on: z.lights.reduce((s, i) => s + Math.min(1, e.level[i] ?? 0), 0) / Math.max(1, z.lights.length),
+    })),
+    hasMusic: audio.active,
+  };
+}
+
+export async function runDirector(request: string) {
+  const st = S();
+  if (!st.analysis || !request.trim()) return;
+  const d = st.director;
+  const turns = [...d.turns, { role: 'you' as const, text: request.trim() }];
+  S().set({ director: { ...d, busy: true, draft: '', thinking: '', turns, error: undefined } });
+  const history = d.turns.flatMap((t, i) => (t.role === 'director' && t.show && d.turns[i - 1]?.role === 'you' ? [{ request: d.turns[i - 1].text, show: t.show }] : []));
+  try {
+    if (!st.labels) await ensureLabels();
+    const show = await direct(directorScene(), request.trim(), history, {
+      key: st.luminalKey, relay: st.relay,
+      onThinking: (t) => { const cur = S().director; S().set({ director: { ...cur, thinking: t.slice(-280) } }); },
+    });
+    const cur = S().director;
+    S().set({ director: { ...cur, busy: false, thinking: '', turns: [...cur.turns, { role: 'director', text: show.summary || show.name, show }] } });
+    playShow(show);
+  } catch (err) {
+    const cur = S().director;
+    S().set({ director: { ...cur, busy: false, thinking: '', error: (err as Error).message } });
+  }
+}
+
+// ---------------------------------------------------------------- music
+
+export async function listen(source: 'mic' | 'tab' | null) {
+  const set = S().set;
+  if (!source) {
+    audio.stop();
+    live.engine.audio = null;
+    set({ music: { ...S().music, source: null, error: undefined } });
+    return;
+  }
+  try {
+    await audio.start(source);
+    set({ music: { ...S().music, source, error: undefined } });
+  } catch (err) {
+    const msg = (err as Error).name === 'NotAllowedError' ? 'Permission to listen was not given.' : (err as Error).message;
+    set({ music: { ...S().music, source: null, error: msg } });
+  }
+}

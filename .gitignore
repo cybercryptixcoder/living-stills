@@ -7,3 +7,6 @@ test-results
 scratch
 public/scenes/dev-*
 .e2e
+dist-test
+.e2e*
+dist-run

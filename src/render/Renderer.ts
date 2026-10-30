@@ -9,6 +9,8 @@ export interface RenderInput {
   h: number;
   layers: LayerData[];
   sprite?: SpriteData;
+  /** daylight version of the picture (sRGB RGBA), mixed in by `daylight` */
+  ambient?: Uint8ClampedArray;
 }
 
 export interface RenderParams {
@@ -16,6 +18,7 @@ export interface RenderParams {
   layerB: number;
   mix: number;
   ambient: number;
+  daylight?: number;
   exposure: number;
   glow: number;
   haze: number;
@@ -157,6 +160,8 @@ export class Renderer {
     this.array('ids', gl.RGBA8, gl.UNSIGNED_BYTE, gl.NEAREST, w, h, layers.map((l) => l.ids));
     this.array('w', gl.RGBA8, gl.UNSIGNED_BYTE, gl.NEAREST, w, h, layers.map((l) => l.weights));
     this.tex2d('table', gl.RGBA32F, gl.FLOAT, gl.NEAREST, 256, 1, new Float32Array(256 * 4));
+    if (input.ambient) this.tex2d('ambient', gl.SRGB8_ALPHA8, gl.UNSIGNED_BYTE, gl.LINEAR, w, h, new Uint8Array(input.ambient.buffer, input.ambient.byteOffset, input.ambient.byteLength));
+    else if (this.tex.ambient) { gl.deleteTexture(this.tex.ambient); this.tex.ambient = null; }
     if (sprite) {
       this.tex2d('spLit', gl.RGBA16F, gl.FLOAT, gl.LINEAR, sprite.rect[2], sprite.rect[3], sprite.lit);
       this.tex2d('spDark', gl.RGBA16F, gl.FLOAT, gl.LINEAR, sprite.rect[2], sprite.rect[3], sprite.dark);
@@ -234,6 +239,8 @@ export class Renderer {
     gl.uniform1i(c.u.uLayerB, p.layerB);
     gl.uniform1f(c.u.uMix, p.mix);
     gl.uniform1f(c.u.uAmbient, p.ambient);
+    gl.uniform1f(c.u.uDay, this.tex.ambient ? p.daylight ?? 0 : 0);
+    this.bindTex(c, 'uDayTex', 8, this.tex.ambient ?? this.tex.table);
     gl.uniform1i(c.u.uHasSprite, sprite ? 1 : 0);
     if (sprite) {
       this.bindTex(c, 'uSpLit', 5, this.tex.spLit);

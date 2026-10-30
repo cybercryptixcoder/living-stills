@@ -2,10 +2,9 @@
 // Runs inside the analysis worker; images arrive as decoded RGBA.
 
 import {
-  analyzeSplit, boxBlur, computeSprite, compositeSprite, cropDelta, layerFromContributions, lightScore,
-  linearToRgba, rgbaToLinear, smoothstep, type CropDelta,
+  analyzeSplit, boxBlur, computeSprite, cropDelta, layerFromContributions, rgbaToLinear, smoothstep, type CropDelta,
 } from './analysis';
-import type { AnalysisResult, GroupInfo, LayerData, LightInfo, Rect, SceneDoc, SpriteData } from './types';
+import type { AnalysisResult, GroupInfo, LightInfo, Marker, Rect, SceneDoc, SpriteData } from './types';
 import { DEFAULT_ANALYSIS } from './types';
 
 export interface Decoded {
@@ -38,13 +37,14 @@ function plate(doc: SceneDoc, get: ImageGetter): Promise<PlateInfo> {
 async function computePlate(doc: SceneDoc, get: ImageGetter): Promise<PlateInfo> {
   const { width: w, height: h } = doc;
   const p = { ...DEFAULT_ANALYSIS, ...(doc.analysis ?? {}) };
-  const layered = doc.method === 'layered' || doc.method === 'grid';
+  const layered = doc.method === 'layered';
   const onKey = layered ? 'plateOn' : 'on';
   const offKey = layered ? 'plateOff' : 'off';
   const [on, off] = await Promise.all([get(onKey, [w, h]), get(offKey, [w, h])]);
   const split = analyzeSplit(on.data, off.data, w, h, {
     cleanup: p.cleanup, strictness: p.coreStrictness, maxLights: p.maxLights,
-    waterline: doc.waterline === undefined ? undefined : doc.waterline,
+    waterline: doc.waterline === undefined ? undefined : doc.waterline, signed: p.signed,
+    focus: doc.markers?.length ? markerFocus(doc.markers, w) : undefined,
   });
   let sprite: SpriteData | undefined;
   if (layered && doc.motion) {
@@ -52,11 +52,6 @@ async function computePlate(doc: SceneDoc, get: ImageGetter): Promise<PlateInfo>
     sprite = computeSprite(tOn.data, tOff.data, on.data, off.data, w, h, doc.motion.rect);
   }
   return { split, sprite };
-}
-
-/** Linear lights-off frame for grid frame `f` (plate with the dark element at its offset). */
-export function gridFrameLin(split: PlateInfo['split'], sprite: SpriteData, w: number, h: number, dx: number): Float32Array {
-  return compositeSprite(split.offLin, w, h, sprite, dx, 0);
 }
 
 /**
@@ -84,136 +79,132 @@ function splitOwnership(layer: { ids: Uint8Array; weights: Uint8Array }, w: numb
   };
 }
 
-/** For a static grid group: how much of each pixel's light belongs to that group's lights. */
-export function ownershipFn(lights: LightInfo[], members: Set<number>, waterline: number | null) {
+/**
+ * Two-stage scenes: only change near the lights you placed counts as light. The rest of the
+ * difference is the image model redrawing things (hatching, texture) and would become noise lights.
+ * Glow is allowed to reach a good way past each object.
+ */
+export function markerFocus(markers: Marker[], w: number) {
+  const boxes = markers.map((m) => m.box ?? [m.x - 0.05 * w, m.y - 0.05 * w, m.x + 0.05 * w, m.y + 0.05 * w]);
+  const reach = 0.14 * w;
   return (x: number, y: number) => {
-    let mine = 0, all = 0;
-    for (const L of lights) {
-      const [s] = lightScore(L, x, y, waterline);
-      all += s;
-      if (members.has(L.id)) mine += s;
+    let best = 0;
+    for (const [x0, y0, x1, y1] of boxes) {
+      const dx = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
+      const dy = y < y0 ? y0 - y : y > y1 ? y - y1 : 0;
+      const d = Math.hypot(dx, dy);
+      const v = d <= 0 ? 1 : Math.exp(-(d * d) / (2 * reach * reach * 0.35));
+      if (v > best) best = v;
+      if (best >= 1) break;
     }
-    return all > 0 ? mine / all : 0;
+    return best < 0.02 ? 0 : best;
   };
+}
+
+/** Two-stage scenes: every light found belongs to the marker the user placed on it (or "other"). */
+function groupByMarkers(lights: LightInfo[], markers: Marker[], w: number): GroupInfo[] {
+  const pad = 0.04 * w;
+  for (const L of lights) {
+    let pick: Marker | null = null, best = Infinity;
+    for (const m of markers) {
+      if (!m.box) continue;
+      const [x0, y0, x1, y1] = m.box;
+      if (L.x >= x0 - pad && L.x <= x1 + pad && L.y >= y0 - pad && L.y <= y1 + pad) {
+        const area = (x1 - x0) * (y1 - y0);
+        if (area < best) { best = area; pick = m; }
+      }
+    }
+    if (!pick) {
+      best = Infinity;
+      for (const m of markers) {
+        const d = Math.hypot(L.x - m.x, L.y - m.y);
+        if (d < best) { best = d; pick = m; }
+      }
+      if (best > 0.2 * w) pick = null;
+    }
+    L.marker = pick?.n ?? 0;
+  }
+  const groups: GroupInfo[] = [];
+  for (const m of [...markers].sort((a, b) => a.n - b.n)) {
+    const ls = lights.filter((L) => L.marker === m.n);
+    if (!ls.length) continue;
+    groups.push({ id: groups.length, name: markerName(m), lights: ls.map((L) => L.id), x: m.x, y: m.y });
+  }
+  const rest = lights.filter((L) => !L.marker);
+  if (rest.length) {
+    const x = rest.reduce((a, L) => a + L.x, 0) / rest.length, y = rest.reduce((a, L) => a + L.y, 0) / rest.length;
+    groups.push({ id: groups.length, name: 'Other light', lights: rest.map((L) => L.id), x, y });
+  }
+  const byLight = new Map<number, number>();
+  groups.forEach((g) => g.lights.forEach((id) => byLight.set(id, g.id)));
+  for (const L of lights) L.group = byLight.get(L.id) ?? 0;
+  return groups;
+}
+
+export function markerName(m: Marker) {
+  // your own words first (short and yours); the planner's fuller description otherwise
+  let t = (m.note || m.object || `Light ${m.n}`).trim().replace(/^(the|a|an) /i, '');
+  if (t.length > 42) t = t.slice(0, 40).replace(/\s+\S*$/, '') + '…';
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 export async function analyzeScene(doc: SceneDoc, get: ImageGetter): Promise<AnalysisResult> {
   const t0 = performance.now();
   const { width: w, height: h } = doc;
-  const n = w * h;
   const p = { ...DEFAULT_ANALYSIS, ...(doc.analysis ?? {}) };
   const { split, sprite } = await plate(doc, get);
   const stats = { ...split.stats, ms: 0 };
 
-  if (doc.method === 'split' || doc.method === 'layered') {
+  let lights = split.lights, groups = split.groups;
+  if (doc.markers?.length) {
+    lights = split.lights.map((L) => ({ ...L }));
+    groups = groupByMarkers(lights, doc.markers, w);
+  }
+  const ambient = doc.images.ambient ? (await get('ambient', [w, h])).data.slice() : undefined;
+  const common = { width: w, height: h, waterline: split.waterline, stats, signed: split.signed, ambient };
+
+  if (doc.method !== 'perLight') {
     stats.ms = performance.now() - t0;
-    return {
-      width: w, height: h, layers: [split.layer], lights: split.lights, groups: split.groups,
-      sprite, waterline: split.waterline, stats,
-    };
+    return { ...common, layers: [split.layer], lights, groups, sprite };
   }
 
-  if (doc.method === 'perLight') {
-    const crops: CropDelta[] = [];
-    const replaced = new Set<number>();
-    for (const r of doc.refinements ?? []) {
-      // Find the light again by where it was; ids can change when lights are re-found.
-      let id = r.lightId;
-      if (r.at) {
-        let best = Infinity;
-        for (const L of split.lights) {
-          const [x0, y0, x1, y1] = L.bbox;
-          const dx = r.at[0] < x0 ? x0 - r.at[0] : r.at[0] > x1 ? r.at[0] - x1 : 0;
-          const dy = r.at[1] < y0 ? y0 - r.at[1] : r.at[1] > y1 ? r.at[1] - y1 : 0;
-          const d = Math.hypot(dx, dy) + 0.01 * Math.hypot(L.x - r.at[0], L.y - r.at[1]);
-          if (d < best) { best = d; id = L.id; }
-        }
-        if (best > 40) continue; // that light no longer exists
+  const crops: CropDelta[] = [];
+  const replaced = new Set<number>();
+  for (const r of doc.refinements ?? []) {
+    // Find the light again by where it was; ids can change when lights are re-found.
+    let id = r.lightId;
+    if (r.at) {
+      let best = Infinity;
+      for (const L of split.lights) {
+        const [x0, y0, x1, y1] = L.bbox;
+        const dx = r.at[0] < x0 ? x0 - r.at[0] : r.at[0] > x1 ? r.at[0] - x1 : 0;
+        const dy = r.at[1] < y0 ? y0 - r.at[1] : r.at[1] > y1 ? r.at[1] - y1 : 0;
+        const d = Math.hypot(dx, dy) + 0.01 * Math.hypot(L.x - r.at[0], L.y - r.at[1]);
+        if (d < best) { best = d; id = L.id; }
       }
-      if (replaced.has(id)) continue;
-      const img = await get(r.image, [r.crop[2], r.crop[3]]);
-      crops.push(cropDelta(split.offLin, w, h, r.crop, img.data, id, p.cleanup, splitOwnership(split.layer, w, h, id, r.crop)));
-      replaced.add(id);
+      if (best > 40) continue; // that light no longer exists
     }
-    const edited = layerFromContributions(w, h, split.layer.base, crops, {
-      D: split.D, ids: split.layer.ids, weights: split.layer.weights, replaced,
-    });
-    const lights = split.lights.map((L) => ({ ...L, refined: replaced.has(L.id) }));
-    stats.ms = performance.now() - t0;
-    return {
-      width: w, height: h, layers: [split.layer, edited], lights, groups: split.groups,
-      waterline: split.waterline, stats, editedLayer: 1,
-    };
+    if (replaced.has(id)) continue;
+    const img = await get(r.image, [r.crop[2], r.crop[3]]);
+    crops.push(cropDelta(split.offLin, w, h, r.crop, img.data, id, p.cleanup, splitOwnership(split.layer, w, h, id, r.crop)));
+    replaced.add(id);
   }
-
-  // grid: every frame x every group was generated separately
-  const grid = doc.grid!;
-  if (!sprite) throw new Error('Grid scenes need a moving element.');
-  const layers: LayerData[] = [];
-  const perGroupPos: Record<number, [number, number][]> = {};
-  const perGroupFlux: Record<number, number> = {};
-  const perGroupRGB: Record<number, [number, number, number]> = {};
-  const owners = new Map<number, (x: number, y: number) => number>();
-  for (const g of grid.groups)
-    if (g.kind === 'static' && g.lights?.length) owners.set(g.id, ownershipFn(split.lights, new Set(g.lights), split.waterline));
-  for (let f = 0; f < grid.frames; f++) {
-    const baseLin = gridFrameLin(split, sprite, w, h, grid.offsets[f]);
-    const crops: CropDelta[] = [];
-    for (const cell of grid.cells.filter((c) => c.f === f)) {
-      const img = await get(cell.image, [cell.crop[2], cell.crop[3]]);
-      const cd = cropDelta(baseLin, w, h, cell.crop, img.data, cell.g, p.cleanup, owners.get(cell.g));
-      crops.push(cd);
-      // light position for this frame = flux-weighted centroid of its contribution
-      let sx = 0, sy = 0, sf = 0, r = 0, gg = 0, b = 0;
-      const [cx, cy, cw] = cell.crop;
-      for (let i = 0; i < cd.d.length / 3; i++) {
-        const l = 0.2126 * cd.d[i * 3] + 0.7152 * cd.d[i * 3 + 1] + 0.0722 * cd.d[i * 3 + 2];
-        if (l <= 0) continue;
-        sx += (cx + (i % cw)) * l; sy += (cy + ((i / cw) | 0)) * l; sf += l;
-        r += cd.d[i * 3]; gg += cd.d[i * 3 + 1]; b += cd.d[i * 3 + 2];
-      }
-      (perGroupPos[cell.g] ??= [])[f] = sf > 0 ? [sx / sf, sy / sf] : [cx + cell.crop[2] / 2, cy + cell.crop[3] / 2];
-      perGroupFlux[cell.g] = (perGroupFlux[cell.g] ?? 0) + sf / grid.frames;
-      const prev = perGroupRGB[cell.g] ?? [0, 0, 0];
-      perGroupRGB[cell.g] = [prev[0] + r, prev[1] + gg, prev[2] + b];
-    }
-    layers.push(layerFromContributions(w, h, linearToRgba(baseLin, n), crops));
-  }
-  const lights: LightInfo[] = grid.groups.map((g, k) => {
-    const pos = perGroupPos[g.id] ?? [];
-    const avg = pos.reduce((a, q) => [a[0] + q[0] / pos.length, a[1] + q[1] / pos.length], [0, 0]);
-    const rgb = perGroupRGB[g.id] ?? [1, 0.8, 0.5];
-    const m = Math.max(...rgb, 1e-9);
-    return {
-      id: g.id, x: avg[0], y: avg[1], bbox: [avg[0] - 8, avg[1] - 8, avg[0] + 8, avg[1] + 8],
-      area: 64, flux: perGroupFlux[g.id] ?? 1, color: [rgb[0] / m, rgb[1] / m, rgb[2] / m], group: k,
-      framePos: pos,
-    };
+  const edited = layerFromContributions(w, h, split.layer.base, crops, {
+    D: split.D, ids: split.layer.ids, weights: split.layer.weights, replaced,
   });
-  const groups: GroupInfo[] = grid.groups.map((g, k) => ({
-    id: k, name: g.name, lights: [g.id], x: lights[k].x, y: lights[k].y, kind: g.kind,
-  }));
+  const refinedLights = lights.map((L) => ({ ...L, refined: replaced.has(L.id) }));
   stats.ms = performance.now() - t0;
-  return {
-    width: w, height: h, layers, lights, groups, waterline: split.waterline, stats,
-    frameOffsets: grid.offsets,
-  };
+  return { ...common, layers: [split.layer, edited], lights: refinedLights, groups, editedLayer: 1 };
 }
 
 /** sRGB RGBA bytes of a crop of a grid frame or of a stored image (for sending to the model). */
 export async function cropSource(
   doc: SceneDoc, get: ImageGetter,
-  src: { kind: 'image'; key: string } | { kind: 'gridFrame'; dx: number; litElement?: boolean },
+  src: { kind: 'image'; key: string },
   crop: Rect,
 ): Promise<Decoded> {
   const { width: w, height: h } = doc;
-  let full: Uint8ClampedArray;
-  if (src.kind === 'image') full = (await get(src.key, [w, h])).data;
-  else {
-    const { split, sprite } = await plate(doc, get);
-    if (!sprite) throw new Error('No moving element in this scene.');
-    full = linearToRgba(compositeSprite(split.offLin, w, h, sprite, src.dx, src.litElement ? 1 : 0), w * h);
-  }
+  const full = (await get(src.key, [w, h])).data;
   const [cx, cy, cw, ch] = crop;
   const out = new Uint8ClampedArray(cw * ch * 4);
   // Crops may reach past the picture (to keep a light centred): repeat the edge pixels there.
@@ -226,15 +217,6 @@ export async function cropSource(
     }
   }
   return { w: cw, h: ch, data: out };
-}
-
-/** Exposed for the grid planner: the static analysis of a layered scene's plate. */
-export async function plateSummary(doc: SceneDoc, get: ImageGetter) {
-  const { split, sprite } = await plate(doc, get);
-  return {
-    lights: split.lights, groups: split.groups, waterline: split.waterline,
-    sprite: sprite ? { rect: sprite.rect, spillRect: sprite.spillRect } : undefined,
-  };
 }
 
 export { rgbaToLinear };

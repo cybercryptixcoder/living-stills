@@ -2,8 +2,14 @@
 // It is plain mutable state (no React), stepped from the render loop.
 
 import type { LightInfo, Vec3 } from '../core/types';
+import type { AudioFrame } from './audio';
+import { compile, evaluate, type Show, type ShowScene } from './show';
 
-export type ModeId = 'hand' | 'torch' | 'paint' | 'trail' | 'route' | 'sweep' | 'breathe' | 'flicker' | 'dusk';
+export type ModeId = 'hand' | 'torch' | 'paint' | 'trail' | 'route' | 'sweep' | 'breathe' | 'flicker' | 'music' | 'show';
+export type MusicMap = 'together' | 'height' | 'across' | 'beat';
+/** A behaviour given to individual lights from the light panel; it runs on top of any effect. */
+export type LightFx = 'steady' | 'breathe' | 'flicker' | 'music';
+const FX: LightFx[] = ['steady', 'breathe', 'flicker', 'music'];
 export type SwitchFeel = 'filament' | 'instant' | 'neon';
 
 export interface ModeParams {
@@ -16,15 +22,15 @@ export interface ModeParams {
   unrest: number; // share of lights that flicker
   keep: boolean; // spatial modes keep your switched-on lights lit
   erase: boolean; // paint switches lights off instead of on
+  music: MusicMap; // how music maps onto the lights
 }
 
 export const DEFAULT_PARAMS: ModeParams = {
-  radius: 0.14, softness: 0.55, afterglow: 2.2, speed: 1, angle: 0, depth: 0.7, unrest: 0.35, keep: false, erase: false,
+  radius: 0.14, softness: 0.55, afterglow: 2.2, speed: 1, angle: 0, depth: 0.7, unrest: 0.35, keep: false, erase: false, music: 'together',
 };
 
 /** Sweep cycle: switch on across the picture, then off, repeating. */
 const SWEEP_PERIOD = 9;
-const DUSK_PERIOD = 26;
 
 function mulberry(seed: number) {
   let a = seed >>> 0;
@@ -120,6 +126,18 @@ export class Engine {
   litness = 0;
   litColor: Vec3 = [1, 0.75, 0.45];
   private wakeAt = -100;
+  /** zone (0-based) of each light, set by the app after zoning */
+  zoneOf = new Int16Array(0);
+  zoneCount = 0;
+  /** per-light behaviour from the light panel */
+  fx = new Uint8Array(0);
+  /** latest audio analysis (music mode, music fx, music steps in shows) */
+  audio: AudioFrame | null = null;
+  /** the running show (presets and the director) */
+  show: { compiled: ReturnType<typeof compile>; t0: number; start: Float32Array } | null = null;
+  showTime = 0;
+  private showOut = new Float32Array(0);
+  private showColors: (Vec3 | null | undefined)[] = [];
 
   /** Longest time step per frame; tests on software rendering raise it so engine time keeps up. */
   maxDt = 0.1;
@@ -148,6 +166,11 @@ export class Engine {
     this.onAt = new Float64Array(n).fill(-10);
     this.wasOn = new Uint8Array(n);
     this.colors = new Array(n).fill(null);
+    this.fx = new Uint8Array(n);
+    this.zoneOf = new Int16Array(n).fill(-1);
+    this.showOut = new Float32Array(n);
+    this.showColors = new Array(n).fill(undefined);
+    this.show = null;
     this.posX = new Float32Array(n);
     this.posY = new Float32Array(n);
     lights.forEach((L, i) => { this.posX[i] = L.x; this.posY[i] = L.y; });
@@ -182,15 +205,37 @@ export class Engine {
     this.posY[i] = y;
   }
 
-  /** Grid scenes: light positions move between frames. */
-  setFramePos(fa: number, fb: number, mix: number) {
-    this.lights.forEach((L, i) => {
-      const p = L.framePos;
-      if (!p?.length) return;
-      const a = p[fa] ?? p[0], b = p[fb] ?? a;
-      this.posX[i] = a[0] + (b[0] - a[0]) * mix;
-      this.posY[i] = a[1] + (b[1] - a[1]) * mix;
-    });
+  /** Scene facts a show needs (positions 0..1, ids, zones). */
+  showScene(): ShowScene {
+    const n = this.count;
+    const x = new Float32Array(n), y = new Float32Array(n);
+    for (let i = 0; i < n; i++) { x[i] = this.posX[i] / this.W; y[i] = this.posY[i] / this.H; }
+    return { x, y, ids: [...this.lights.map((L) => L.id), ...(this.element ? [-1] : [])], zoneOf: this.zoneOf, count: n };
+  }
+
+  /** Starts a show from the lights' current state. */
+  playShow(show: Show) {
+    const start = new Float32Array(this.count);
+    for (let i = 0; i < this.count; i++) start[i] = this.mode === 'show' && this.show ? this.showOut[i] : this.base[i];
+    this.show = { compiled: compile(show, this.showScene()), t0: this.time, start };
+    this.showTime = 0;
+    this.mode = 'show';
+  }
+
+  /** Stops a show; the lights keep the state the show left them in. */
+  stopShow() {
+    if (this.show) for (let i = 0; i < this.count; i++) this.base[i] = Math.min(1, this.showOut[i]);
+    if (this.show) this.showColors.forEach((c, i) => { if (c !== undefined) this.colors[i] = c; });
+    this.show = null;
+  }
+
+  setFx(indices: number[], fx: LightFx) {
+    const v = FX.indexOf(fx);
+    for (const i of indices) this.fx[i] = v;
+  }
+
+  fxOf(i: number): LightFx {
+    return FX[this.fx[i]] ?? 'steady';
   }
 
   groupOf(i: number) {
@@ -292,7 +337,15 @@ export class Engine {
       pmin = lo; pspan = Math.max(1, hi - lo);
     }
     const sweepPh = (((t - this.modeT0) * sp) / SWEEP_PERIOD) % 1;
-    const duskPh = (((t - this.modeT0) * sp) / DUSK_PERIOD) % 1;
+    if (this.mode === 'show' && this.show) {
+      this.showTime = evaluate(this.show.compiled, (t - this.show.t0) * sp, this.show.start, this.showOut, this.showColors, this.audio);
+    }
+    const au = this.audio;
+    // music: where each light sits decides which part of the sound drives it
+    let ylo = Infinity, yhi = -Infinity, xlo = Infinity, xhi = -Infinity;
+    if (this.mode === 'music' && au) {
+      for (let i = 0; i < n; i++) { ylo = Math.min(ylo, this.posY[i]); yhi = Math.max(yhi, this.posY[i]); xlo = Math.min(xlo, this.posX[i]); xhi = Math.max(xhi, this.posX[i]); }
+    }
     this.ripples = this.ripples.filter((r) => (t - r.t0) * sp * this.W * 0.35 < Math.hypot(this.W, this.H) + R);
 
     let litNum = 0, litDen = 0, cr = 0, cg = 0, cb = 0;
@@ -335,12 +388,27 @@ export class Engine {
           }
           break;
         }
-        case 'dusk': {
-          let on: number;
-          if (duskPh < 0.45) on = smooth(s.onset - 0.02, s.onset + 0.02, duskPh / 0.45);
-          else if (duskPh < 0.66) on = 1;
-          else on = 1 - smooth(s.offset - 0.02, s.offset + 0.02, (duskPh - 0.66) / 0.34);
-          v = base * on;
+        case 'show':
+          v = this.show ? this.showOut[i] : base;
+          break;
+        case 'music': {
+          if (!au) { v = base * 0.15; break; }
+          const bands = au.bands, B = bands.length;
+          let m: number;
+          if (p.music === 'height') {
+            // low lights take the bass, high lights the treble
+            const q = yhi > ylo ? (yhi - this.posY[i]) / (yhi - ylo) : 0.5;
+            m = bands[Math.min(B - 1, Math.floor(q * B))];
+          } else if (p.music === 'across') {
+            const q = xhi > xlo ? (this.posX[i] - xlo) / (xhi - xlo) : 0.5;
+            m = bands[Math.min(B - 1, Math.floor(q * B))];
+          } else if (p.music === 'beat') {
+            // each beat lights the next zone
+            const zc = Math.max(1, this.zoneCount);
+            const z = this.zoneOf[i] < 0 ? 0 : this.zoneOf[i];
+            m = (au.beats % zc === z ? 1 : 0.08) * (0.55 + 0.45 * au.beat) + 0.1 * au.level;
+          } else m = 0.25 * au.level + 0.75 * Math.max(au.bass * 0.8, au.beat);
+          v = base * Math.min(1.4, m * 1.25);
           break;
         }
         default:
@@ -354,6 +422,13 @@ export class Engine {
         v = Math.max(v, Math.exp(-((d - rad) * (d - rad)) / (2 * width * width)));
       }
       if (transient && p.keep) v = Math.max(v, base);
+      // the light's own behaviour (from the light panel)
+      const fx = this.fx[i];
+      if (fx === 1) v *= 1 - 0.75 * 0.5 * (1 + Math.sin((2 * Math.PI * t) / (s.period * 0.7) + s.phase));
+      else if (fx === 2) {
+        const x = t * s.rate * 3.2 + s.offset * 100;
+        v *= Math.max(0, 1 - smooth(0.55, 0.75, noise1(x)) * 0.9 - 0.06 * noise1(t * 37 + s.phase * 10));
+      } else if (fx === 3) v *= au ? Math.min(1.4, 0.15 + 1.2 * Math.max(au.bass, au.beat)) : 0.3;
       const wt = (t - this.wakeAt) / 2.4;
       if (wt < 1.2) v *= smooth(s.onset * 0.8, s.onset * 0.8 + 0.2, wt);
       const g = this.groupOf(i);
@@ -376,13 +451,22 @@ export class Engine {
         this.level[i] = cur + (tgt - cur) * (1 - Math.exp(-dt / tau));
       } else this.level[i] = tgt;
       const flux = i < this.lights.length ? this.lights[i].flux : this.element!.flux;
-      const c = this.colors[i] ?? this.c0[i];
+      const c = this.colorOf(i) ?? this.c0[i];
       litNum += flux * this.level[i]; litDen += flux;
       cr += flux * this.level[i] * c[0]; cg += flux * this.level[i] * c[1]; cb += flux * this.level[i] * c[2];
     }
     this.litness = litDen > 0 ? Math.min(1, litNum / litDen) : 0;
     const m = Math.max(cr, cg, cb, 1e-9);
     if (litNum > 1e-6) this.litColor = [cr / m, cg / m, cb / m];
+  }
+
+  /** The colour a light shows now: a running show's colour, else the one you gave it (null = its own). */
+  colorOf(i: number): Vec3 | null {
+    if (this.mode === 'show' && this.show) {
+      const c = this.showColors[i];
+      if (c !== undefined) return c;
+    }
+    return this.colors[i];
   }
 
   /** Per-channel multiplier that recolours a light from its own colour c0 to `target`, keeping brightness. */
@@ -406,7 +490,7 @@ export class Engine {
     let num = 0, den = 0;
     this.lights.forEach((L, i) => {
       if (L.id > 255) return;
-      const g = Engine.colourGain(L.color, this.colors[i]);
+      const g = Engine.colourGain(L.color, this.colorOf(i));
       const v = this.level[i];
       T[L.id * 4] = v * g[0] * wg[0];
       T[L.id * 4 + 1] = v * g[1] * wg[1];
@@ -423,7 +507,7 @@ export class Engine {
     if (!this.element) return { t: 0, gain: [1, 1, 1] };
     const i = this.count - 1;
     const wg = this.warmthGain();
-    const g = Engine.colourGain(this.element.color, this.colors[i]);
+    const g = Engine.colourGain(this.element.color, this.colorOf(i));
     return { t: this.level[i], gain: [g[0] * wg[0], g[1] * wg[1], g[2] * wg[2]] };
   }
 }

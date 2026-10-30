@@ -60,7 +60,7 @@
   },
   "waterline": 548,
   "demo": {
-    "order": 1,
+    "order": 5,
     "startMode": "hand",
     "blurb": "The train is cut out once and loops forever. The town is split into 240 lights.",
     "route": [

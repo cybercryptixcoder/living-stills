@@ -2,12 +2,15 @@
 
 import { create } from 'zustand';
 import type { SceneEntry } from './core/library';
-import type { AnalysisResult, SceneDoc } from './core/types';
+import type { AnalysisResult, SceneDoc, SceneLabels } from './core/types';
 import type { JobStep } from './core/pipeline';
 import { DEFAULT_MODEL } from './core/openrouter';
 import { DEFAULT_PARAMS, type ModeId, type ModeParams, type SwitchFeel } from './play/engine';
+import type { Show } from './play/show';
+import type { Zone } from './play/zones';
 
-export type Sheet = null | 'scenes' | 'create' | 'settings' | 'refine' | 'grid' | 'help' | 'reflections';
+export type Sheet = null | 'scenes' | 'create' | 'settings' | 'help' | 'reflections' | 'refine' | 'studio';
+export type Menu = null | 'effects' | 'presets' | 'look' | 'capture' | 'scene';
 
 export interface View {
   ambient: number;
@@ -16,9 +19,10 @@ export interface View {
   haze: number;
   grain: number;
   warmth: number;
+  daylight: number;
 }
 
-export const DEFAULT_VIEW: View = { ambient: 1, exposure: 1, glow: 0.5, haze: 0.3, grain: 0.5, warmth: 0 };
+export const DEFAULT_VIEW: View = { ambient: 1, exposure: 1, glow: 0.5, haze: 0.3, grain: 0.5, warmth: 0, daylight: 0 };
 
 export interface Job {
   title: string;
@@ -37,12 +41,34 @@ export interface SceneState {
   doc: SceneDoc;
   source: 'example' | 'local';
   lights: number;
-  groups: { name: string; count: number; kind?: 'static' | 'moving' }[];
   hasElement: boolean;
   elementName?: string;
-  frames: number;
   editedLayer?: number;
   waterline: number | null;
+  signed: boolean;
+  hasDaylight: boolean;
+}
+
+/** What the light panel is controlling. Indices are engine indices. */
+export interface Selection {
+  anchor: number;
+  scope: 'light' | 'zone' | 'picked';
+  picked: number[]; // shift-click / box selection
+}
+
+export interface DirectorTurn {
+  role: 'you' | 'director';
+  text: string;
+  show?: Show;
+}
+
+export interface DirectorState {
+  open: boolean;
+  busy: boolean;
+  draft: string;
+  thinking: string;
+  turns: DirectorTurn[];
+  error?: string;
 }
 
 export type Survey = 'heat' | 'dots' | 'off';
@@ -57,12 +83,17 @@ interface Settings {
   feel: SwitchFeel;
   theme: Theme;
   survey: Survey;
+  luminalKey: string;
+  relay: string;
 }
 
 const SETTINGS_KEY = 'living-stills:settings';
 
 function loadSettings(): Settings {
-  const d: Settings = { key: '', model: DEFAULT_MODEL, resolution: '1K', aspect: '16:9', sound: true, feel: 'filament', theme: 'auto', survey: 'heat' };
+  const d: Settings = {
+    key: '', model: DEFAULT_MODEL, resolution: '1K', aspect: '16:9', sound: true, feel: 'filament', theme: 'auto', survey: 'off',
+    luminalKey: '', relay: '',
+  };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw) return { ...d, ...JSON.parse(raw) };
@@ -86,28 +117,32 @@ export interface Store extends Settings {
   statusText: string;
   scene: SceneState | null;
   analysis: AnalysisResult | null;
+  zones: Zone[];
+  labels: SceneLabels | null;
   mode: ModeId;
   params: ModeParams;
-  groups: number[];
   master: number;
-  elementFader: number;
   view: View;
-  motion: { playing: boolean; speed: number; blend: number };
+  motion: { playing: boolean; speed: number };
   variant: 'estimate' | 'edits';
-  showLights: boolean;
   cinema: boolean;
-  selected: number | null; // engine light index
+  selection: Selection | null;
   hovered: number | null;
-  hoverGroup: number | null;
+  /** bumps when per-light state changes outside React (the light panel re-reads the engine) */
+  rev: number;
   sheet: Sheet;
+  menu: Menu;
   job: Job | null;
   toasts: Toast[];
   picking: boolean; // choosing lights for real edits
   picked: number[]; // light ids chosen for real edits
   recording: boolean;
-  /** image-px y of a waterline being previewed in the Reflections sheet */
   previewWaterline: number | null;
   routeReady: boolean;
+  /** the show playing now (a preset or the director's) */
+  playing: { name: string; id?: string; loop: boolean } | null;
+  music: { source: 'mic' | 'tab' | null; error?: string; sensitivity: number };
+  director: DirectorState;
   set: (p: Partial<Store>) => void;
   setSettings: (p: Partial<Settings>) => void;
   toast: (text: string, kind?: Toast['kind']) => void;
@@ -125,20 +160,20 @@ export const useStore = create<Store>((set, get) => ({
   statusText: '',
   scene: null,
   analysis: null,
+  zones: [],
+  labels: null,
   mode: 'hand',
   params: { ...DEFAULT_PARAMS },
-  groups: [],
   master: 1,
-  elementFader: 1,
   view: { ...DEFAULT_VIEW },
-  motion: { playing: true, speed: 1, blend: 0.6 },
+  motion: { playing: true, speed: 1 },
   variant: 'edits',
-  showLights: false,
   cinema: false,
-  selected: null,
+  selection: null,
   hovered: null,
-  hoverGroup: null,
+  rev: 0,
   sheet: null,
+  menu: null,
   job: null,
   toasts: [],
   picking: false,
@@ -146,6 +181,9 @@ export const useStore = create<Store>((set, get) => ({
   recording: false,
   previewWaterline: null,
   routeReady: false,
+  playing: null,
+  music: { source: null, sensitivity: 1 },
+  director: { open: false, busy: false, draft: '', thinking: '', turns: [] },
   set: (p) => set(p),
   setSettings: (p) => { saveSettings(p); set(p); },
   toast: (text, kind = 'info') => {

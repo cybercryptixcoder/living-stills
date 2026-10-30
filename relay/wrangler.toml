@@ -1,0 +1,4 @@
+# Living Stills relay for Luminal. Deploy with the button in the README, or:  npx wrangler deploy
+name = "living-stills-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
