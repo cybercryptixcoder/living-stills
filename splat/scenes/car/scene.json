@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "id": "car",
+  "title": "Coupe with glowing tyres, marker sketch",
+  "prompt": "A clean marker-and-pencil car design sketch of a low red sports coupe, side view, parked on a quiet street at dusk, on toned grey paper with white highlights, confident line work",
+  "lighting": "glowing like a neon concept render",
+  "createdAt": "2026-10-30T06:08:45.673Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "off": "off.jpg",
+    "on": "on.jpg"
+  },
+  "steps": [
+    {
+      "label": "Making the picture",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10992,
+      "image": "off"
+    },
+    {
+      "label": "Switching your lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10765,
+      "image": "on"
+    }
+  ],
+  "cost": 0.018,
+  "markers": [
+    {
+      "n": 1,
+      "x": 291,
+      "y": 527,
+      "note": "only the rubber of the front tyre - not the rim or the car",
+      "color": "#2fe0ff",
+      "object": "the black rubber outer tyre ring of the front wheel on the red coupe, lower front left",
+      "box": [
+        244.79999999999998,
+        445.43999999999994,
+        394.4,
+        606.72
+      ]
+    },
+    {
+      "n": 2,
+      "x": 1119,
+      "y": 525,
+      "note": "only the rubber of the rear tyre - not the rim or the car",
+      "color": "#2fe0ff",
+      "object": "the black rubber outer tyre ring of the rear wheel on the red coupe, lower rear right",
+      "box": [
+        951.9999999999999,
+        445.43999999999994,
+        1156,
+        606.72
+      ]
+    },
+    {
+      "n": 3,
+      "x": 181,
+      "y": 403,
+      "note": "the headlight",
+      "color": "#ffe2bd",
+      "object": "the narrow front headlight on the red coupe’s left front nose",
+      "box": [
+        149.6,
+        376.32,
+        231.20000000000002,
+        422.40000000000003
+      ]
+    },
+    {
+      "n": 4,
+      "x": 1210,
+      "y": 338,
+      "note": "the tail light",
+      "color": "#ff3b30",
+      "object": "the small red rear tail light on the right rear corner of the red coupe",
+      "box": [
+        1183.2,
+        314.88,
+        1251.2,
+        360.96
+      ]
+    },
+    {
+      "n": 5,
+      "x": 1036,
+      "y": 77,
+      "note": "the street lamp heads",
+      "color": "#ffb46b",
+      "object": "the two small white street-lamp heads on the tall poles in the upper right background",
+      "box": [
+        979.1999999999999,
+        61.44,
+        1060.8,
+        92.16
+      ]
+    }
+  ],
+  "demo": {
+    "order": 8,
+    "startMode": "hand"
+  }
+}

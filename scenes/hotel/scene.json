@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "id": "hotel",
+  "title": "Hotel facade, from a photo",
+  "prompt": "From a photo",
+  "createdAt": "2026-10-30T06:03:26.042Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 868,
+  "height": 600,
+  "method": "split",
+  "lighting": "a calm evening: warm light in a few rooms and under the entrance canopy",
+  "images": {
+    "ambient": "ambient.jpg",
+    "off": "off.jpg",
+    "on": "on.jpg"
+  },
+  "steps": [
+    {
+      "label": "Your photo",
+      "cost": 0,
+      "ms": 0,
+      "image": "ambient"
+    },
+    {
+      "label": "Making the dark version",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 7451,
+      "image": "off"
+    },
+    {
+      "label": "Switching your lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9411,
+      "image": "on"
+    }
+  ],
+  "cost": 0.018,
+  "markers": [
+    {
+      "n": 1,
+      "x": 680,
+      "y": 360,
+      "note": "the lights under the entrance canopy",
+      "color": "#ffb46b",
+      "object": "one of the small recessed downlights in the metal underside of the flat entrance canopy, near its right edge above the glass doors",
+      "box": [
+        659.6800000000001,
+        348,
+        703.08,
+        372
+      ]
+    },
+    {
+      "n": 2,
+      "x": 765,
+      "y": 110,
+      "note": "this window - a warm room light",
+      "color": "#ffb46b",
+      "object": "the tall narrow dark rectangular window in the upper-right white facade, near the right edge of the building and above the canopy",
+      "box": [
+        742.14,
+        81,
+        785.5400000000001,
+        135
+      ]
+    },
+    {
+      "n": 3,
+      "x": 650,
+      "y": 160,
+      "note": "this window",
+      "color": "#ffe2bd",
+      "object": "the tall narrow dark rectangular window in the white facade, upper-middle-right, one window strip left of dot 2",
+      "box": [
+        637.98,
+        141,
+        664.02,
+        183
+      ]
+    },
+    {
+      "n": 4,
+      "x": 548,
+      "y": 210,
+      "note": "this window",
+      "color": "#ffb46b",
+      "object": "the tall narrow dark rectangular window in the white facade, middle-right area, below and left of dot 3",
+      "box": [
+        533.8199999999999,
+        189,
+        562.464,
+        234
+      ]
+    },
+    {
+      "n": 5,
+      "x": 430,
+      "y": 480,
+      "note": "the ground floor windows",
+      "color": "#ffe2bd",
+      "object": "the ground-floor window/glass pane on the lower facade left of the entrance, behind the low hedge and planter",
+      "box": [
+        403.62,
+        453,
+        455.70000000000005,
+        507
+      ]
+    },
+    {
+      "n": 6,
+      "x": 815,
+      "y": 480,
+      "note": "the glass entrance doors glowing from inside",
+      "color": "#ffb46b",
+      "object": "the tall glass entrance door panel on the far right under the canopy, with metal frame",
+      "box": [
+        794.22,
+        447,
+        837.62,
+        513
+      ]
+    }
+  ],
+  "demo": {
+    "order": 9,
+    "startMode": "hand"
+  }
+}

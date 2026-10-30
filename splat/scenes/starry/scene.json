@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "starry",
+  "title": "The Starry Night, relit",
+  "prompt": "From a photo",
+  "createdAt": "2026-10-30T05:53:13.876Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1152,
+  "height": 912,
+  "method": "split",
+  "lighting": "the swirling stars, the crescent moon and the small lit windows of the village",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg"
+  },
+  "steps": [
+    {
+      "label": "Recreating your picture",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 8216,
+      "image": "on"
+    },
+    {
+      "label": "Switching the lights off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10682,
+      "image": "off"
+    }
+  ],
+  "cost": 0.018,
+  "labels": {
+    "summary": "A swirling night sky full of glowing stars hangs over a dark cypress tree and a small village with a church.",
+    "zones": {
+      "1": "large bright star",
+      "2": "small yellow star",
+      "3": "two glowing stars",
+      "4": "small yellow star",
+      "5": "large crescent moon",
+      "6": "inner edge of moon",
+      "7": "small yellow star",
+      "8": "small yellow star",
+      "9": "two faint stars",
+      "10": "very bright large star",
+      "11": "church windows and steeple",
+      "12": "village house windows"
+    },
+    "key": "6.3.29|12.5.23|19.3.28|31.4.13|42.8.50|46.8.38|17.13.5|35.10.10|5.18.14|19.21.17|29.35.4|39.34.9"
+  },
+  "demo": {
+    "order": 3,
+    "startMode": "hand"
+  }
+}

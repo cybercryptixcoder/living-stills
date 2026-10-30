@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "id": "arcade",
+  "title": "Arcade corner, pixel art",
+  "prompt": "Isometric pixel art of a tiny arcade and noodle stand on a street corner at night, bright saturated colours, crisp pixels, a cat on the awning",
+  "lighting": "neon signs in hot pink and cyan, the glowing screens of the arcade cabinets, red paper lanterns over the noodle stand, a vending machine",
+  "createdAt": "2026-10-30T05:52:29.039Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg"
+  },
+  "steps": [
+    {
+      "label": "Making the picture, lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 5778,
+      "image": "on"
+    },
+    {
+      "label": "Switching the lights off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9611,
+      "image": "off"
+    }
+  ],
+  "cost": 0.018,
+  "labels": {
+    "summary": "A nighttime pixel-art scene of a street corner with an arcade and a noodle stand.",
+    "zones": {
+      "1": "green cross pharmacy sign",
+      "2": "purple sign with cat",
+      "3": "pink arcade sign",
+      "4": "green vertical neon sign",
+      "5": "lit vending machine display",
+      "6": "red paper lanterns",
+      "7": "streetlight reflections on pavement",
+      "8": "red glow on sidewalk",
+      "9": "green light on ground"
+    },
+    "key": "10.8.17|37.8.11|18.11.13|31.12.10|29.17.12|36.15.23|13.23.10|38.22.29|19.26.4"
+  },
+  "demo": {
+    "order": 4,
+    "startMode": "hand"
+  }
+}

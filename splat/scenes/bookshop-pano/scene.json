@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "id": "bookshop-pano",
+  "title": "Bookshop, look around",
+  "prompt": "A photograph of a cosy independent bookshop interior in the late afternoon, tall wooden shelves full of books, a reading nook with two armchairs, plants, soft daylight through the big front window, shot on a 35mm lens",
+  "lighting": "warm string lights along the top of the shelves, a green banker's lamp on the counter, a paper floor lamp by the armchairs, a small pink neon OPEN sign in the window",
+  "createdAt": "2026-10-30T05:45:19.128Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "on": "on.jpg",
+    "off": "off.jpg",
+    "depth": "depth.png",
+    "orbit90On": "orbit90On.jpg",
+    "orbit90Off": "orbit90Off.jpg",
+    "orbit180On": "orbit180On.jpg",
+    "orbit180Off": "orbit180Off.jpg",
+    "orbit270On": "orbit270On.jpg",
+    "orbit270Off": "orbit270Off.jpg",
+    "orbit90Depth": "orbit90Depth.png",
+    "orbit180Depth": "orbit180Depth.png",
+    "orbit270Depth": "orbit270Depth.png"
+  },
+  "steps": [
+    {
+      "label": "Making the picture, lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 6151,
+      "image": "on"
+    },
+    {
+      "label": "Switching the lights off",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10301,
+      "image": "off"
+    },
+    {
+      "label": "Drawing the view from 90\u00b0",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 8758,
+      "image": "orbit90On"
+    },
+    {
+      "label": "Its lights off (90\u00b0)",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10014,
+      "image": "orbit90Off"
+    },
+    {
+      "label": "Drawing the view from 270\u00b0",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 11914,
+      "image": "orbit270On"
+    },
+    {
+      "label": "Drawing the view from 180\u00b0",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 10265,
+      "image": "orbit180On"
+    },
+    {
+      "label": "Its lights off (270\u00b0)",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 11665,
+      "image": "orbit270Off"
+    },
+    {
+      "label": "Its lights off (180\u00b0)",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9501,
+      "image": "orbit180Off"
+    }
+  ],
+  "cost": 0.072,
+  "labels": {
+    "summary": "A cozy bookstore interior with tall wooden bookshelves, a central reading table, armchairs, and warm string lights along the top shelves.",
+    "zones": {
+      "1": "string lights on top shelf",
+      "2": "string lights on top shelf",
+      "3": "string lights on top shelf",
+      "4": "string lights on top shelf",
+      "5": "string lights on top shelf",
+      "6": "string lights on top shelf",
+      "7": "lamp with fabric shade",
+      "8": "green banker's desk lamp"
+    },
+    "key": "4.1.12|10.2.9|16.2.13|23.3.13|28.4.17|34.4.18|37.10.11|19.18.6"
+  },
+  "demo": {
+    "order": 2,
+    "startMode": "hand",
+    "start3d": true,
+    "startSpace": true
+  },
+  "orbit": {
+    "angles": [
+      90,
+      180,
+      270
+    ],
+    "mode": "panorama",
+    "layout": "A cozy, vintage bookstore interior. The main feature is a long wall of tall, dark wood bookshelves filled with colorful books, running along the left and back walls. A large, distressed wooden desk sits in the center-left foreground, holding a green banker's lamp, a mug, books, and a coin tray. To the right, a large window looks out onto a street with buildings and trees. Near the window are two armchairs (brown leather and green fabric), a small round side table, and several potted plants. The floor is wooden with a patterned rug. Warm string lights line the top of the shelves.",
+    "align": [
+      {
+        "angle": 0,
+        "scale": 1,
+        "yaw": 0
+      },
+      {
+        "angle": 90,
+        "scale": 1,
+        "yaw": 0
+      },
+      {
+        "angle": 180,
+        "scale": 1,
+        "yaw": 0
+      },
+      {
+        "angle": 270,
+        "scale": 1,
+        "yaw": 0
+      }
+    ]
+  }
+}

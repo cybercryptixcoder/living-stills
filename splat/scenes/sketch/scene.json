@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "id": "sketch",
+  "title": "Caf\u00e9 corner, pen sketch",
+  "prompt": "A precise architectural pen-and-ink sketch of a corner caf\u00e9 on a European street, ruled straight lines, two-point perspective, fine cross-hatching, black ink on white paper, a hanging sign, big shop windows, a street lamp, balconies above",
+  "lighting": "a warm evening glow that tints the paper around each light; the ink lines stay crisp",
+  "createdAt": "2026-10-30T05:29:54.831Z",
+  "model": "black-forest-labs/flux-3-image-klein",
+  "resolution": "1K",
+  "width": 1360,
+  "height": 768,
+  "method": "split",
+  "images": {
+    "off": "off.jpg",
+    "on": "on.jpg"
+  },
+  "steps": [
+    {
+      "label": "Making the picture",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 6167,
+      "image": "off"
+    },
+    {
+      "label": "Switching your lights on",
+      "model": "black-forest-labs/flux-3-image-klein",
+      "cost": 0.009,
+      "ms": 9682,
+      "image": "on"
+    }
+  ],
+  "cost": 0.018,
+  "markers": [
+    {
+      "n": 1,
+      "x": 188,
+      "y": 272,
+      "note": "the street lamp's lantern",
+      "color": "#ffb46b",
+      "object": "the street lamp's lantern: the small black ink-drawn lantern hanging from the curved street lamp at the far left, above the pavement",
+      "box": [
+        170,
+        239.61599999999999,
+        208.07999999999998,
+        304.12800000000004
+      ]
+    },
+    {
+      "n": 2,
+      "x": 634,
+      "y": 343,
+      "note": "the hanging caf\u00e9 sign",
+      "color": "#ff3b30",
+      "object": "the hanging caf\u00e9 sign: the small white rectangular sign with 'CAF\u00c9' lettering hanging under the awning at the corner",
+      "box": [
+        599.76,
+        314.88,
+        658.24,
+        384
+      ]
+    },
+    {
+      "n": 3,
+      "x": 507,
+      "y": 451,
+      "note": "the big shop window on the left glowing from inside",
+      "color": "#ffb46b",
+      "object": "the big shop window on the left: the large glass storefront window on the left fa\u00e7ade of the caf\u00e9, behind the outdoor tables",
+      "box": [
+        414.8,
+        389.376,
+        595.68,
+        532.992
+      ]
+    },
+    {
+      "n": 4,
+      "x": 972,
+      "y": 465,
+      "note": "the shop window on the right",
+      "color": "#ffe2bd",
+      "object": "the shop window on the right: the large glass storefront window on the right fa\u00e7ade of the caf\u00e9",
+      "box": [
+        877.2,
+        389.376,
+        1067.6000000000001,
+        538.3679999999999
+      ]
+    },
+    {
+      "n": 5,
+      "x": 592,
+      "y": 148,
+      "note": "this upstairs window",
+      "color": "#ffb46b",
+      "object": "this upstairs window: the tall rectangular window on the upper floor of the left fa\u00e7ade, above the caf\u00e9 awning",
+      "box": [
+        557.6,
+        101.376,
+        621.52,
+        197.376
+      ]
+    }
+  ],
+  "demo": {
+    "order": 2,
+    "startMode": "hand"
+  }
+}
